@@ -9,7 +9,82 @@
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
       crossorigin=""/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-        crossorigin=""></script>
+        crossorigin="">function useMyLocation() {
+  const status = document.getElementById("gpsStatus");
+  const setStatus = (msg, type="info") => {
+    if (!status) return;
+    status.textContent = msg;
+    status.style.background = type === "error" ? "#fef2f2" : (type === "success" ? "#f0fdf4" : "#f8fafc");
+    status.style.borderColor = type === "error" ? "#fecaca" : (type === "success" ? "#bbf7d0" : "#dbe4ee");
+  };
+
+  if (!navigator.geolocation) {
+    setStatus("⚠️ This browser does not support GPS. Please search for your starting location manually.", "error");
+    return;
+  }
+
+  setStatus("📡 Requesting your current location… Please choose Allow if the browser asks for permission.");
+
+  navigator.geolocation.getCurrentPosition(
+    async (position) => {
+      const lat = position.coords.latitude;
+      const lon = position.coords.longitude;
+      const accuracy = Math.round(position.coords.accuracy || 0);
+
+      currentLocation = { lat, lon };
+
+      if (window.gpsMarker) map.removeLayer(window.gpsMarker);
+      if (window.gpsAccuracy) map.removeLayer(window.gpsAccuracy);
+
+      window.gpsMarker = L.marker([lat, lon], {
+        title: "Your current GPS location"
+      }).addTo(map).bindPopup(
+        `<b>📍 Your current location</b><br>Accuracy: ${accuracy} m`
+      );
+
+      window.gpsAccuracy = L.circle([lat, lon], {
+        radius: accuracy,
+        weight: 1,
+        fillOpacity: 0.08
+      }).addTo(map);
+
+      map.setView([lat, lon], 14);
+
+      const startInput = document.getElementById("start");
+      if (startInput) startInput.value = `Current GPS location (${lat.toFixed(5)}, ${lon.toFixed(5)})`;
+
+      setStatus(`✅ GPS location detected. Accuracy: about ${accuracy} m. Loading nearby hospitals…`, "success");
+
+      try {
+        await loadNearbyHospitals(lat, lon);
+        setStatus(`✅ GPS location detected. Nearby hospitals are now shown on the map.`, "success");
+      } catch (err) {
+        console.error(err);
+        setStatus("⚠️ GPS worked, but nearby hospitals could not be loaded. Check your internet connection and try again.", "error");
+      }
+    },
+    (error) => {
+      let message = "⚠️ Unable to access your location.";
+
+      if (error.code === 1) {
+        message = "🚫 Location permission was denied. Allow Location for this GitHub Pages site, then click the GPS button again — or search for your starting location manually.";
+      } else if (error.code === 2) {
+        message = "📡 Your location could not be determined. Turn on device location/GPS and try again, or search for your starting location manually.";
+      } else if (error.code === 3) {
+        message = "⏱️ GPS request timed out. Move to an area with better GPS reception and try again, or search manually.";
+      }
+
+      setStatus(message, "error");
+      console.warn("Geolocation error:", error);
+    },
+    {
+      enableHighAccuracy: true,
+      timeout: 15000,
+      maximumAge: 30000
+    }
+  );
+}
+</script>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 
 <style>
@@ -70,8 +145,22 @@ th{background:#f7f9fb}
 <h2>Emergency Location</h2>
 
 <button class="gps" type="button" onclick="detectCurrentLocation()">
-  📍 Use My Current GPS Location
+  📍 📍 Use My Current GPS Location
 </button>
+
+<label>Vehicle Type</label>
+<select id="vehicleType" onchange="onVehicleTypeChange()">
+  <option value="car">🚗 Car / Normal Vehicle</option>
+  <option value="ambulance">🚑 Ambulance — Patient to Hospital</option>
+  <option value="relief-truck">🚚 Relief Truck</option>
+</select>
+<p id="vehicleNote" class="small">
+  Car mode: normal emergency-road suitability ranking.
+</p>
+<div id="routePurpose" style="margin:8px 0;padding:9px 12px;border-radius:10px;background:#fff7ed;border:1px solid #fed7aa;font-size:13px;">
+      🚑 <b>Emergency route:</b> Patient location → selected nearby hospital
+    </div>
+
 
 <label>Current / Starting Point</label>
 <input id="start" placeholder="Use GPS or search a place" autocomplete="off">
@@ -115,6 +204,31 @@ the application calculates actual road distance from OSRM).
 </p>
 </div>
 
+<div class="card" style="border-left:4px solid #dc2626;">
+<h3>🚑 Ambulance Patient-to-Hospital Routing</h3>
+<p class="small">
+When <b>Ambulance — Patient to Hospital</b> is selected, the detected GPS position is
+treated as the patient's pickup location and the selected nearby hospital is treated
+as the destination. The application compares real road routes and applies the
+project's safety criteria, with additional ambulance suitability checks for road
+width, road condition and major blockages.
+</p>
+<p class="small"><b>Important:</b> This is an academic route-safety decision-support
+prototype, not a medical dispatch system or a guarantee of emergency response time,
+road clearance, or legal ambulance access.</p>
+</div>
+<div class="card" style="border-left:4px solid #f59e0b;">
+<h3>🚚 Relief Truck Routing</h3>
+<p class="small">
+Relief Truck is an emergency-vehicle option. Ambulance mode is available separately for patient-to-hospital routing.
+ The application uses the real OSRM road
+network for route geometry and applies your road-width and blockage attributes to
+vehicle suitability. Because the public OSRM driving service does not provide a
+legal heavy-truck routing profile here, this should be presented as <b>relief-truck
+suitability</b>, not as a guarantee of legal truck access or height/weight clearance.
+</p>
+</div>
+
 <div class="card weights">
 <h3>Active AHP Weights</h3>
 <p class="small">
@@ -138,7 +252,9 @@ should be used for a publication-grade re-estimation.
 <b>Road Condition:</b> Good=1, Fair=0.5, Poor=0.<br>
 <b>Road Width:</b> Wide=1, Medium=0.5, Narrow=0.<br>
 <b>Road Blockages:</b> None=1, Minor=0.5, Major=0.<br>
-<b>Distance:</b> shortest displayed road route=1, longest=0.
+<b>Distance:</b> shortest displayed road route=1, longest=0.<br>
+<b>Ambulance:</b> Wide=Suitable, Medium=Caution, Narrow=Avoid; poor condition/major blockages reduce suitability.<br>
+<b>Relief Truck:</b> Wide=Suitable, Medium=Caution, Narrow=Avoid; Major blockages=Avoid.
 </div>
 </div>
 
@@ -158,6 +274,7 @@ should be used for a publication-grade re-estimation.
 <tr>
 <th>Rank</th>
 <th>Route</th>
+<th>Vehicle Suitability</th>
 <th>Distance</th>
 <th>RSS</th>
 <th>Destination</th>
@@ -327,6 +444,73 @@ function distanceScore(distance,min,max){
   return (max-distance)/(max-min);
 }
 
+function getSelectedVehicle(){
+  return document.getElementById("vehicleType")?.value || "car";
+}
+
+function vehicleSuitability(route, vehicle){
+  const width = normalizeText(route["Road Width"]);
+  const blockages = normalizeText(route["Road Blockages"]);
+  const condition = normalizeText(route["Road Condition"]);
+
+  // Normal car: no additional vehicle feasibility penalty.
+  if(vehicle === "car") return 1;
+
+  // Ambulance: prioritize roads that can safely carry an emergency vehicle.
+  // Narrow roads and major blockages are unsuitable. Poor condition is penalized.
+  if(vehicle === "ambulance"){
+    let score = 1;
+
+    if(["narrow","very narrow"].includes(width)) score = 0;
+    else if(["medium","moderate"].includes(width)) score = 0.75;
+
+    if(["major","blocked","severe"].includes(blockages)) score = 0;
+
+    if(["poor","very poor","damaged"].includes(condition)){
+      score = Math.min(score, 0.5);
+    }
+
+    return score;
+  }
+
+  // Relief truck: wide roads preferred; narrow roads/major blockages avoided.
+  if(vehicle === "relief-truck"){
+    let score = 1;
+
+    if(["narrow","very narrow"].includes(width)) score = 0;
+    else if(["medium","moderate"].includes(width)) score = 0.5;
+
+    if(["major","blocked","severe"].includes(blockages)) score = 0;
+
+    return score;
+  }
+
+  return 1;
+}
+function onVehicleTypeChange(){
+  const vehicle = getSelectedVehicle();
+  const note = document.getElementById("vehicleNote");
+
+  if(vehicle === "ambulance"){
+    note.innerHTML =
+      "🚑 Ambulance mode: routes are ranked for safe patient transport to the selected nearby hospital. " +
+      "Road width, condition and blockages are used to avoid unsuitable emergency routes.";
+  }else if(vehicle === "relief-truck"){
+    note.innerHTML =
+      "🚚 Relief Truck mode: wide roads are preferred, narrow roads and major blockages are avoided. " +
+      "OSRM supplies the real road geometry; this does not claim legal truck restrictions.";
+  }else{
+    note.textContent = "Car mode: normal emergency-road suitability ranking.";
+  }
+
+  if(window.lastScoredRoutes && window.lastDestination){
+    const rescored = calculateScores(window.lastScoredRoutes)
+      .sort((a,b)=>b.SafetyScore-a.SafetyScore);
+    window.lastScoredRoutes = rescored;
+    renderResults(rescored, window.lastDestination);
+    drawRoutes(rescored, currentLocation, window.lastDestination);
+  }
+}
 function calculateScores(routes){
   const distances=routes.map(r=>Number(r.Distance));
   const min=Math.min(...distances);
@@ -347,7 +531,24 @@ function calculateScores(routes){
       total += AHP_WEIGHTS[p]*componentScores[p];
     }
 
-    return {...r,componentScores,SafetyScore:total};
+    const vehicle = getSelectedVehicle();
+    const truckSuitability = vehicleSuitability(r, vehicle);
+
+    /*
+     * Keep the original AHP score intact, then apply a vehicle-feasibility
+     * factor. This prevents a narrow/blocked route from being recommended
+     * for a relief truck merely because it is short.
+     */
+    const adjustedScore = vehicle === "relief-truck"
+      ? total * truckSuitability
+      : total;
+
+    return {
+      ...r,
+      componentScores,
+      VehicleSuitability: truckSuitability,
+      SafetyScore: adjustedScore
+    };
   });
 }
 
@@ -627,9 +828,13 @@ async function routeToSelectedHospital(){
       throw new Error("No drivable route was returned.");
     }
 
+    window.lastRawRoutes = candidates;
+    window.lastDestination = destination;
+
     const scored=calculateScores(candidates)
       .sort((a,b)=>b.SafetyScore-a.SafetyScore);
 
+    window.lastScoredRoutes = scored;
     renderResults(scored,destination);
     drawRoutes(scored,currentLocation,destination);
 
@@ -639,6 +844,18 @@ async function routeToSelectedHospital(){
       "✓ Actual OSRM road-network distances calculated.<br>"+
       "✓ Flooding criterion removed from the AHP score.<br>"+
       "✓ Six remaining route-safety criteria used for ranking.<br>"+
+      "✓ Vehicle type: "+(
+        getSelectedVehicle()==="ambulance"
+          ? "Ambulance — Patient to Hospital"
+          : getSelectedVehicle()==="relief-truck"
+            ? "Relief Truck"
+            : "Car / Normal Vehicle"
+      )+"<br>"+
+      (getSelectedVehicle()==="ambulance"
+        ? "✓ Ambulance suitability uses road width, condition and blockages.<br>"
+        : getSelectedVehicle()==="relief-truck"
+          ? "✓ Relief-truck suitability uses road width and blockage attributes.<br>"
+          : "")+
       "✓ Green route = highest Route Suitability Score.";
 
   }catch(error){
@@ -905,6 +1122,11 @@ function renderResults(sorted,destination){
           ${escapeHtml(r.Route)}
           ${i===0?'<span class="badge safe">RECOMMENDED</span>':""}
         </td>
+        <td>${getSelectedVehicle()==="ambulance"
+          ? (r.VehicleSuitability===1 ? "Ambulance Suitable" : r.VehicleSuitability>=0.5 ? "Caution" : "Avoid")
+          : getSelectedVehicle()==="relief-truck"
+            ? (r.VehicleSuitability===1 ? "Suitable" : r.VehicleSuitability===0.5 ? "Caution" : "Avoid")
+            : "Normal"}</td>
         <td>${r.Distance.toFixed(2)} km</td>
         <td><b>${r.SafetyScore.toFixed(4)}</b></td>
         <td>${escapeHtml(r["Destination Accessibility"])}</td>
@@ -924,6 +1146,7 @@ function renderResults(sorted,destination){
 
   document.getElementById("bestRoute").innerHTML=`
     <div class="route-box">
+      <b>🚑 Vehicle:</b> ${getSelectedVehicle()==="ambulance" ? "Ambulance — Patient to Hospital" : getSelectedVehicle()==="relief-truck" ? "Relief Truck" : "Car / Normal Vehicle"}<br>
       <b>🏥 Emergency destination:</b> ${escapeHtml(destination.display)}<br>
       <b>🟢 Recommended route:</b> ${escapeHtml(safest.Route)}<br>
       Route Suitability Score (RSS):
@@ -1137,7 +1360,14 @@ wireEndpointInput("start","start");
 wireEndpointInput("destination","destination");
 
 renderWeights();
+onVehicleTypeChange();
 initMap();
 </script>
+
+    <div style="margin-top:8px;font-size:12px;color:#64748b;">
+      GPS works when this page is opened through a secure HTTPS site such as GitHub Pages.
+      Your browser must also allow location access.
+    </div>
+    
 </body>
 </html>
