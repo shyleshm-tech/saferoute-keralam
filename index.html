@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>SafeRoute Keralam | AHP Emergency Hospital Routing</title>
+<title>SafeRoute Keralam | AHP Emergency Vehicle Routing</title>
 
 <link rel="stylesheet"
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -133,7 +133,7 @@ th{background:#f7f9fb}
 <body>
 <header>
   <h1>🛣️ SafeRoute Keralam</h1>
-  <p>AHP-Based Emergency Hospital Route Safety &mdash; GPS + Nearby Emergency Destinations + Real Road Routing</p>
+  <p>AHP-Based Emergency Route Safety &mdash; Ambulance to Hospitals | Relief Truck to Relief Camps</p>
 </header>
 
 <div class="container">
@@ -174,25 +174,25 @@ GPS is used only after you give browser location permission. On GitHub Pages,
 browser geolocation works through HTTPS.
 </p>
 
-<label>Hospital Destination</label>
-<select id="hospitalSelect" onchange="selectHospitalFromList()">
-  <option value="">Detect GPS first to load nearby hospitals</option>
+<label id="destinationLabel">Hospital Destination</label>
+<select id="emergencyDestinationSelect" onchange="selectEmergencyDestinationFromList()">
+  <option value="">Detect GPS first to load nearby destinations</option>
 </select>
 
 <input id="destination" placeholder="Or search a hospital/place" autocomplete="off">
 <div id="destinationSuggestions" class="suggestions"></div>
 
-<button onclick="routeToSelectedHospital()">🚑 Find Safest Route to Hospital</button>
+<button id="routeButton" onclick="routeToSelectedEmergencyDestination()">🚑 Find Safest Route to Hospital</button>
 
 <div id="status" class="status" style="margin-top:12px">
-Ready. Allow GPS to detect your current location and load nearby hospitals.
+Ready. Select an emergency vehicle, then allow GPS to load the correct nearby destination type.
 </div>
 </div>
 
 <div class="card">
 <h3>Nearby Emergency Destinations</h3>
 <div id="hospitalList" class="hospital-list small">
-No hospitals loaded yet.
+No emergency destinations loaded yet.
 </div>
 </div>
 
@@ -311,7 +311,7 @@ Suitability Score (RSS) is highlighted as the recommended emergency route.
    1. Flooding criterion removed completely.
    2. GPS becomes the default origin.
    3. Nearby emergency destinations are discovered from OpenStreetMap/Overpass.
-   4. User selects a hospital as destination.
+   4. Ambulance selects a hospital; Relief Truck selects a relief camp / evacuation centre.
    5. OSRM supplies genuine road-network routes and distances.
    6. Remaining AHP criteria rank the genuine route alternatives.
    ============================================================ */
@@ -366,7 +366,10 @@ let currentLocationMarker=null;
 let currentLocationCircle=null;
 let currentLocation=null;
 let nearbyHospitals=[];
+let nearbyReliefCamps=[];
 let selectedHospital=null;
+let selectedReliefCamp=null;
+let nearbyEmergencyDestinations=[];
 let startMarker=null;
 let destinationMarker=null;
 let mapSelectionMode="destination";
@@ -488,38 +491,77 @@ function vehicleSuitability(route, vehicle){
 
   return 1;
 }
-function onVehicleTypeChange(){
-  const vehicle = getSelectedVehicle();
-  const note = document.getElementById("vehicleNote");
+async function onVehicleTypeChange(){
+  const vehicle=getSelectedVehicle();
+  const note=document.getElementById("vehicleNote");
+  const destinationLabel=document.getElementById("destinationLabel");
+  const destinationInput=document.getElementById("destination");
+  const routeButton=document.getElementById("routeButton");
+  const routePurpose=document.getElementById("routePurpose");
 
-  if(vehicle === "ambulance"){
-    note.innerHTML =
-      "🚑 Ambulance mode: routes are ranked for safe patient transport to the selected nearby hospital. " +
+  if(vehicle==="ambulance"){
+    note.innerHTML=
+      "🚑 Ambulance mode: routes are ranked for safe patient transport to a selected nearby hospital. "+
       "Road width, condition and blockages are used to avoid unsuitable emergency routes.";
-  }else if(vehicle === "relief-truck"){
-    note.innerHTML =
-      "🚚 Relief Truck mode: wide roads are preferred, narrow roads and major blockages are avoided. " +
-      "OSRM supplies the real road geometry; this does not claim legal truck restrictions.";
+    destinationLabel.textContent="Hospital Destination";
+    destinationInput.placeholder="Or search a hospital/place";
+    routeButton.textContent="🚑 Find Safest Route to Hospital";
+    routePurpose.innerHTML=
+      "🚑 <b>Emergency route:</b> Patient location → selected nearby hospital";
   }else{
-    note.textContent = "Select an emergency vehicle to rank suitable routes.";
+    note.innerHTML=
+      "🚚 Relief Truck mode: routes are ranked for supply delivery to a selected relief camp / evacuation centre. "+
+      "Hospitals are NOT used as relief-truck destinations.";
+    destinationLabel.textContent="Relief Camp / Evacuation Centre";
+    destinationInput.placeholder="Or search a relief camp / evacuation centre";
+    routeButton.textContent="🚚 Find Safest Route to Relief Camp";
+    routePurpose.innerHTML=
+      "🚚 <b>Relief mission:</b> Dispatch location → selected relief camp / evacuation centre";
   }
+
+  const destinationNote=document.getElementById("destinationTypeNote");
+  if(destinationNote){
+    destinationNote.innerHTML=vehicle==="ambulance"
+      ? "🚑 Ambulance → Hospitals"
+      : "🚚 Relief Truck → Relief Camps / Evacuation Centres";
+  }
+
+  // Clear the old destination so a hospital cannot remain selected after
+  // switching to relief-truck mode (or vice versa).
+  document.getElementById("emergencyDestinationSelect").innerHTML=
+    `<option value="">${vehicle==="ambulance"
+      ? "Detect GPS first to load nearby hospitals"
+      : "Detect GPS first to load nearby relief camps / evacuation centres"}</option>`;
+  document.getElementById("destination").value="";
+  document.getElementById("destination").dataset.lat="";
+  document.getElementById("destination").dataset.lon="";
+  selectedHospital=null;
+  selectedReliefCamp=null;
+  nearbyEmergencyDestinations=[];
 
   if(window.lastScoredRoutes && window.lastDestination){
-    const rescored = calculateScores(window.lastScoredRoutes)
-      .sort((a,b)=>b.SafetyScore-a.SafetyScore);
-    window.lastScoredRoutes = rescored;
-    renderResults(rescored, window.lastDestination);
-    drawRoutes(rescored, currentLocation, window.lastDestination);
+    // Do not silently keep a hospital destination when switching to a truck.
+    window.lastScoredRoutes=null;
+    window.lastDestination=null;
+    clearRoutes();
   }
 
-  const destinationNote = document.getElementById("destinationTypeNote");
-  if(destinationNote){
-    destinationNote.innerHTML =
-      getSelectedVehicle() === "ambulance"
-        ? "🚑 Ambulance → Hospitals"
-        : "🚚 Relief Truck → Relief Camps / Evacuation Centres";
+  if(currentLocation){
+    try{
+      document.getElementById("status").innerHTML=
+        vehicle==="ambulance"
+          ? "Loading nearby hospitals..."
+          : "Loading nearby relief camps / evacuation centres...";
+      await loadEmergencyDestinations(currentLocation.lat,currentLocation.lon);
+    }catch(e){
+      console.error(e);
+      document.getElementById("status").innerHTML=
+        "<span class='error'>Could not load emergency destinations:</span> "+
+        escapeHtml(e.message);
+    }
   }
 }
+
 function calculateScores(routes){
   const distances=routes.map(r=>Number(r.Distance));
   const min=Math.min(...distances);
@@ -608,8 +650,8 @@ function detectCurrentLocation(){
 
       map.setView([lat,lon],14);
 
-      status.innerHTML="✓ GPS location detected. Finding nearby hospitals...";
-      await loadNearbyHospitals(lat,lon);
+      status.innerHTML="✓ GPS location detected. Finding nearby emergency destinations...";
+      await loadEmergencyDestinations(lat,lon);
     },
     error=>{
       let msg="Unable to obtain GPS location.";
@@ -627,8 +669,6 @@ function detectCurrentLocation(){
 async function loadNearbyHospitals(lat,lon){
   const status=document.getElementById("status");
 
-  /* Search approximately within 15 km.
-     Overpass returns hospitals mapped in OpenStreetMap. */
   const query=`
 [out:json][timeout:25];
 (
@@ -638,95 +678,111 @@ async function loadNearbyHospitals(lat,lon){
 out center tags;
 `;
 
-  try{
-    const response=await fetch(
-      "https://overpass-api.de/api/interpreter",
-      {
-        method:"POST",
-        body:query,
-        headers:{"Content-Type":"text/plain;charset=UTF-8"}
-      }
-    );
-
-    if(!response.ok) throw new Error("Hospital search service is unavailable.");
-
-    const data=await response.json();
-
-    nearbyHospitals=deduplicateHospitals(
-      (data.elements || []).map(normalizeHospital).filter(Boolean)
-    ).sort((a,b)=>a.distanceKm-b.distanceKm);
-
-    renderHospitals();
-
-    if(!nearbyHospitals.length){
-      status.innerHTML="<span class='error'>No mapped hospitals were returned within 15 km.</span>";
-      return;
+  const response=await fetch(
+    "https://overpass-api.de/api/interpreter",
+    {
+      method:"POST",
+      body:query,
+      headers:{"Content-Type":"text/plain;charset=UTF-8"}
     }
+  );
 
-    status.innerHTML=
-      "✓ GPS detected.<br>"+
-      "✓ "+nearbyHospitals.length+" nearby mapped hospitals found.<br>"+
-      "Select a hospital to calculate genuine road alternatives.";
-  }catch(error){
-    console.error(error);
-    status.innerHTML=
-      "<span class='error'>Hospital search failed:</span> "+error.message;
-  }
+  if(!response.ok) throw new Error("Hospital search service is unavailable.");
+
+  const data=await response.json();
+
+  nearbyHospitals=deduplicateHospitals(
+    (data.elements || []).map(normalizeHospital).filter(Boolean)
+  ).sort((a,b)=>a.distanceKm-b.distanceKm);
+
+  return nearbyHospitals;
 }
 
-async function loadNearbyReliefCamps(lat, lon){
-  const radius = 15000;
-  const query = `
+async function loadNearbyReliefCamps(lat,lon){
+  const radius=15000;
+  const query=`
 [out:json][timeout:25];
 (
-  node(around:${radius},${lat},${lon})["amenity"="shelter"];
-  way(around:${radius},${lat},${lon})["amenity"="shelter"];
-  relation(around:${radius},${lat},${lon})["amenity"="shelter"];
-  node(around:${radius},${lat},${lon})["emergency"="shelter"];
-  way(around:${radius},${lat},${lon})["emergency"="shelter"];
-  relation(around:${radius},${lat},${lon})["emergency"="shelter"];
-  node(around:${radius},${lat},${lon})["social_facility"="shelter"];
-  way(around:${radius},${lat},${lon})["social_facility"="shelter"];
-  relation(around:${radius},${lat},${lon})["social_facility"="shelter"];
+  nwr["amenity"="shelter"](around:${radius},${lat},${lon});
+  nwr["emergency"="shelter"](around:${radius},${lat},${lon});
+  nwr["social_facility"="shelter"](around:${radius},${lat},${lon});
+  nwr["amenity"="community_centre"]["emergency"="yes"](around:${radius},${lat},${lon});
 );
 out center tags;
 `;
-  const res = await fetch("https://overpass-api.de/api/interpreter", {
+
+  const res=await fetch("https://overpass-api.de/api/interpreter",{
     method:"POST",
     headers:{"Content-Type":"application/x-www-form-urlencoded"},
     body:"data="+encodeURIComponent(query)
   });
-  if(!res.ok) throw new Error("Relief-camp data request failed");
-  const data = await res.json();
 
-  const items = [];
-  const seen = new Set();
+  if(!res.ok) throw new Error("Relief-camp data request failed.");
+
+  const data=await res.json();
+  const items=[];
+  const seen=new Set();
 
   for(const el of (data.elements || [])){
-    const tags = el.tags || {};
-    const name = tags.name || tags["name:en"] || "Relief Camp / Evacuation Centre";
-    const lat2 = el.lat ?? el.center?.lat;
-    const lon2 = el.lon ?? el.center?.lon;
-    if(lat2 == null || lon2 == null) continue;
+    const tags=el.tags || {};
+    const name=tags.name || tags["name:en"] ||
+      "Relief Camp / Evacuation Centre";
+    const lat2=el.lat ?? el.center?.lat;
+    const lon2=el.lon ?? el.center?.lon;
+    if(lat2==null || lon2==null) continue;
 
-    const key = `${name}|${lat2.toFixed(5)}|${lon2.toFixed(5)}`;
+    const key=`${name}|${Number(lat2).toFixed(5)}|${Number(lon2).toFixed(5)}`;
     if(seen.has(key)) continue;
     seen.add(key);
 
     items.push({
-      id: "camp_"+el.id,
+      id:"camp_"+el.type+"_"+el.id,
       name,
-      lat: lat2,
-      lon: lon2,
-      type: "Relief Camp / Evacuation Centre",
-      distanceKm: haversine(lat, lon, lat2, lon2)
+      lat:Number(lat2),
+      lon:Number(lon2),
+      type:"Relief Camp / Evacuation Centre",
+      distanceKm:haversineKm({lat,lon},{lat:Number(lat2),lon:Number(lon2)})
     });
   }
 
   items.sort((a,b)=>a.distanceKm-b.distanceKm);
+  nearbyReliefCamps=items;
   return items;
 }
 
+async function loadEmergencyDestinations(lat,lon){
+  const vehicle=getSelectedVehicle();
+  const status=document.getElementById("status");
+
+  hospitalLayer.clearLayers();
+  nearbyEmergencyDestinations=[];
+
+  if(vehicle==="ambulance"){
+    await loadNearbyHospitals(lat,lon);
+    nearbyEmergencyDestinations=nearbyHospitals;
+    renderEmergencyDestinations();
+    if(!nearbyHospitals.length){
+      status.innerHTML="<span class='error'>No mapped hospitals were returned within 15 km.</span>";
+      return;
+    }
+    status.innerHTML=
+      "✓ GPS detected.<br>"+
+      "✓ "+nearbyHospitals.length+" nearby hospitals found.<br>"+
+      "Select a hospital to calculate genuine road alternatives.";
+  }else{
+    await loadNearbyReliefCamps(lat,lon);
+    nearbyEmergencyDestinations=nearbyReliefCamps;
+    renderEmergencyDestinations();
+    if(!nearbyReliefCamps.length){
+      status.innerHTML="<span class='error'>No mapped relief camps / evacuation centres were returned within 15 km.</span>";
+      return;
+    }
+    status.innerHTML=
+      "✓ GPS detected.<br>"+
+      "✓ "+nearbyReliefCamps.length+" nearby relief camps / evacuation centres found.<br>"+
+      "Select a relief camp to calculate genuine road alternatives.";
+  }
+}
 
 function normalizeHospital(x){
   const lat=x.lat ?? x.center?.lat;
@@ -762,107 +818,144 @@ function deduplicateHospitals(list){
   return out;
 }
 
-function renderHospitals(){
-  const select=document.getElementById("hospitalSelect");
+function renderEmergencyDestinations(){
+  const select=document.getElementById("emergencyDestinationSelect");
   const list=document.getElementById("hospitalList");
+  const vehicle=getSelectedVehicle();
 
   hospitalLayer.clearLayers();
+  select.innerHTML="";
 
-  select.innerHTML="<option value=''>Select a nearby hospital</option>";
+  const isAmbulance=vehicle==="ambulance";
+  const destinations=isAmbulance ? nearbyHospitals : nearbyReliefCamps;
 
-  if(!nearbyHospitals.length){
-    list.innerHTML="No hospitals found.";
+  const firstOption=document.createElement("option");
+  firstOption.value="";
+  firstOption.textContent=isAmbulance
+    ? "Select a nearby hospital"
+    : "Select a nearby relief camp / evacuation centre";
+  select.appendChild(firstOption);
+
+  list.innerHTML="";
+
+  if(!destinations.length){
+    list.innerHTML=isAmbulance
+      ? "No hospitals found."
+      : "No relief camps / evacuation centres found.";
     return;
   }
 
-  nearbyHospitals.forEach((h,index)=>{
+  destinations.forEach((d,index)=>{
     const option=document.createElement("option");
     option.value=String(index);
-    option.textContent=
-      h.name+" — "+h.distanceKm.toFixed(1)+" km";
+    option.textContent=d.name+" — "+d.distanceKm.toFixed(1)+" km";
     select.appendChild(option);
 
-    const marker=L.marker([h.lat,h.lon],{
+    const marker=L.marker([d.lat,d.lon],{
       icon:L.divIcon({
         className:"",
-        html:"<div class='hospital-dot'></div>",
+        html:isAmbulance
+          ? "<div class='hospital-dot'></div>"
+          : "<div style='background:#f59e0b;border-radius:50%;width:18px;height:18px;border:3px solid white;box-shadow:0 1px 5px #555'></div>",
         iconSize:[18,18],
         iconAnchor:[9,9]
       })
     }).addTo(hospitalLayer);
 
     marker.bindPopup(
-      "<b>🏥 "+escapeHtml(h.name)+"</b><br>"+
-      h.distanceKm.toFixed(2)+" km straight-line from GPS location<br>"+
-      "<button onclick='chooseHospital("+index+")'>Route here</button>"
+      "<b>"+(isAmbulance ? "🏥 " : "🚚 ")+escapeHtml(d.name)+"</b><br>"+
+      d.distanceKm.toFixed(2)+" km straight-line from GPS location<br>"+
+      "<button onclick='chooseEmergencyDestination("+index+")'>Route here</button>"
     );
 
     const item=document.createElement("div");
     item.className="hospital-item";
     item.innerHTML=
-      "<b>"+escapeHtml(h.name)+"</b><br>"+
-      h.distanceKm.toFixed(2)+" km from your location"+
-      (h.address ? "<br><span class='small'>"+escapeHtml(h.address)+"</span>":"");
-
-    item.onclick=()=>chooseHospital(index);
+      "<b>"+escapeHtml(d.name)+"</b><br>"+
+      d.distanceKm.toFixed(2)+" km from your location"+
+      (d.address ? "<br><span class='small'>"+escapeHtml(d.address)+"</span>":"");
+    item.onclick=()=>chooseEmergencyDestination(index);
     list.appendChild(item);
   });
 }
 
-function chooseHospital(index){
-  const h=nearbyHospitals[index];
-  if(!h) return;
+function chooseEmergencyDestination(index){
+  const vehicle=getSelectedVehicle();
+  const destinations=vehicle==="ambulance" ? nearbyHospitals : nearbyReliefCamps;
+  const d=destinations[index];
+  if(!d) return;
 
-  selectedHospital=h;
-  document.getElementById("hospitalSelect").value=String(index);
-  document.getElementById("destination").value=h.name;
-  document.getElementById("destination").dataset.lat=h.lat;
-  document.getElementById("destination").dataset.lon=h.lon;
+  if(vehicle==="ambulance"){
+    selectedHospital=d;
+    selectedReliefCamp=null;
+  }else{
+    selectedReliefCamp=d;
+    selectedHospital=null;
+  }
+
+  document.getElementById("emergencyDestinationSelect").value=String(index);
+  document.getElementById("destination").value=d.name;
+  document.getElementById("destination").dataset.lat=d.lat;
+  document.getElementById("destination").dataset.lon=d.lon;
 
   if(destinationMarker) map.removeLayer(destinationMarker);
 
-  destinationMarker=L.marker([h.lat,h.lon])
+  destinationMarker=L.marker([d.lat,d.lon])
     .addTo(markerLayer)
-    .bindPopup("<b>🏥 "+escapeHtml(h.name)+"</b>")
+    .bindPopup(
+      "<b>"+(vehicle==="ambulance" ? "🏥 " : "🚚 ")+
+      escapeHtml(d.name)+"</b>"
+    )
     .openPopup();
 
-  map.fitBounds([
-    [currentLocation.lat,currentLocation.lon],
-    [h.lat,h.lon]
-  ],{padding:[35,35]});
+  if(currentLocation){
+    map.fitBounds([
+      [currentLocation.lat,currentLocation.lon],
+      [d.lat,d.lon]
+    ],{padding:[35,35]});
+  }
 
   document.getElementById("status").innerHTML=
-    "Selected hospital: <b>"+escapeHtml(h.name)+"</b>.<br>"+
-    "Click <b>Find Safest Route to Hospital</b>.";
+    "Selected "+(vehicle==="ambulance" ? "hospital" : "relief camp / evacuation centre")+
+    ": <b>"+escapeHtml(d.name)+"</b>.<br>"+
+    "Click <b>"+(vehicle==="ambulance"
+      ? "Find Safest Route to Hospital"
+      : "Find Safest Route to Relief Camp")+"</b>.";
 }
 
-function selectHospitalFromList(){
-  const value=document.getElementById("hospitalSelect").value;
+function selectEmergencyDestinationFromList(){
+  const value=document.getElementById("emergencyDestinationSelect").value;
   if(value==="") return;
-  chooseHospital(Number(value));
+  chooseEmergencyDestination(Number(value));
 }
 
-async function routeToSelectedHospital(){
+async function routeToSelectedEmergencyDestination(){
   const status=document.getElementById("status");
+  const vehicle=getSelectedVehicle();
 
   try{
     if(!currentLocation){
       throw new Error("Detect your current GPS location first.");
     }
 
-    const hospitalIndex=document.getElementById("hospitalSelect").value;
-
+    const index=document.getElementById("emergencyDestinationSelect").value;
     let destination;
 
-    if(hospitalIndex!==""){
-      selectedHospital=nearbyHospitals[Number(hospitalIndex)];
+    if(index!==""){
+      const d=(vehicle==="ambulance"
+        ? nearbyHospitals
+        : nearbyReliefCamps)[Number(index)];
+
+      if(!d) throw new Error("The selected emergency destination is no longer available.");
+
       destination={
-        lat:selectedHospital.lat,
-        lon:selectedHospital.lon,
-        display:selectedHospital.name
+        lat:d.lat,
+        lon:d.lon,
+        display:d.name
       };
     }else{
       const input=document.getElementById("destination");
+
       if(input.dataset.lat && input.dataset.lon){
         destination={
           lat:Number(input.dataset.lat),
@@ -870,10 +963,14 @@ async function routeToSelectedHospital(){
           display:input.value
         };
       }else if(input.value.trim()){
-        status.innerHTML="Searching for the hospital...";
+        status.innerHTML="Searching for the selected emergency destination...";
         destination=await geocodeEndpoint(input.value.trim());
       }else{
-        throw new Error("Select or search for a hospital destination.");
+        throw new Error(
+          vehicle==="ambulance"
+            ? "Select or search for a hospital destination."
+            : "Select or search for a relief camp / evacuation centre."
+        );
       }
     }
 
@@ -881,7 +978,10 @@ async function routeToSelectedHospital(){
 
     destinationMarker=L.marker([destination.lat,destination.lon])
       .addTo(markerLayer)
-      .bindPopup("<b>🏥 Destination</b><br>"+escapeHtml(destination.display));
+      .bindPopup(
+        "<b>"+(vehicle==="ambulance" ? "🏥 Hospital" : "🚚 Relief Camp / Evacuation Centre")+
+        "</b><br>"+escapeHtml(destination.display)
+      );
 
     status.innerHTML=
       "Calculating genuine road alternatives from your GPS location to "+
@@ -893,38 +993,39 @@ async function routeToSelectedHospital(){
       throw new Error("No drivable route was returned.");
     }
 
-    window.lastRawRoutes = candidates;
-    window.lastDestination = destination;
+    window.lastRawRoutes=candidates;
+    window.lastDestination=destination;
 
     const scored=calculateScores(candidates)
       .sort((a,b)=>b.SafetyScore-a.SafetyScore);
 
-    window.lastScoredRoutes = scored;
+    window.lastScoredRoutes=scored;
     renderResults(scored,destination);
     drawRoutes(scored,currentLocation,destination);
 
     status.innerHTML=
       "✓ GPS used as the starting point.<br>"+
-      "✓ Selected hospital used as destination.<br>"+
+      "✓ "+(vehicle==="ambulance"
+        ? "Selected hospital"
+        : "Selected relief camp / evacuation centre")+
+      " used as destination.<br>"+
       "✓ Actual OSRM road-network distances calculated.<br>"+
       "✓ Flooding criterion removed from the AHP score.<br>"+
       "✓ Six remaining route-safety criteria used for ranking.<br>"+
-      "✓ Vehicle type: "+(
-        getSelectedVehicle()==="ambulance"
-          ? "Ambulance — Patient to Hospital"
-          : "Relief Truck — Supplies to Relief Camp"
-      )+"<br>"+
-      (getSelectedVehicle()==="ambulance"
+      "✓ Vehicle type: "+
+      (vehicle==="ambulance"
+        ? "Ambulance — Patient to Hospital"
+        : "Relief Truck — Supplies to Relief Camp")+
+      "<br>"+
+      (vehicle==="ambulance"
         ? "✓ Ambulance suitability uses road width, condition and blockages.<br>"
-        : getSelectedVehicle()==="relief-truck"
-          ? "✓ Relief-truck suitability uses road width and blockage attributes.<br>"
-          : "")+
+        : "✓ Relief-truck suitability uses road width and blockage attributes.<br>")+
       "✓ Green route = highest Route Suitability Score.";
 
   }catch(error){
     console.error(error);
     status.innerHTML=
-      "<span class='error'>Routing error:</span> "+error.message;
+      "<span class='error'>Routing error:</span> "+escapeHtml(error.message);
   }
 }
 
@@ -1208,7 +1309,7 @@ function renderResults(sorted,destination){
   document.getElementById("bestRoute").innerHTML=`
     <div class="route-box">
       <b>🚑 Vehicle:</b> ${getSelectedVehicle()==="ambulance" ? "Ambulance — Patient to Hospital" : "Relief Truck — Supplies to Relief Camp"}<br>
-      <b>🏥 Emergency destination:</b> ${escapeHtml(destination.display)}<br>
+      <b>${getSelectedVehicle()==="ambulance" ? "🏥 Hospital destination:" : "🚚 Relief camp / evacuation centre:"}</b> ${escapeHtml(destination.display)}<br>
       <b>🟢 Recommended route:</b> ${escapeHtml(safest.Route)}<br>
       Route Suitability Score (RSS):
       <b>${safest.SafetyScore.toFixed(4)}</b><br>
