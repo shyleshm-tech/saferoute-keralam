@@ -699,55 +699,120 @@ out center tags;
 }
 
 async function loadNearbyReliefCamps(lat,lon){
-  const radius=15000;
-  const query=`
-[out:json][timeout:25];
+  /*
+   * Relief camps are less consistently tagged in OpenStreetMap than hospitals.
+   * Therefore this loader uses multiple Overpass servers, several recognised
+   * emergency/shelter tags, and a wider-radius fallback. If formal camps are
+   * not mapped, schools/community centres are returned as POTENTIAL evacuation
+   * centres rather than being incorrectly called confirmed relief camps.
+   */
+  const endpoints=[
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter"
+  ];
+
+  async function queryOverpass(query){
+    let lastError=null;
+    for(const endpoint of endpoints){
+      try{
+        const controller=new AbortController();
+        const timer=setTimeout(()=>controller.abort(),30000);
+        const res=await fetch(endpoint,{
+          method:"POST",
+          headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8"},
+          body:"data="+encodeURIComponent(query),
+          signal:controller.signal
+        });
+        clearTimeout(timer);
+        if(!res.ok) throw new Error("HTTP "+res.status);
+        return await res.json();
+      }catch(err){
+        lastError=err;
+      }
+    }
+    throw lastError || new Error("All Overpass servers failed");
+  }
+
+  function makeItems(data, fallback=false){
+    const items=[];
+    const seen=new Set();
+
+    for(const el of (data?.elements || [])){
+      const tags=el.tags || {};
+      const lat2=el.lat ?? el.center?.lat;
+      const lon2=el.lon ?? el.center?.lon;
+      if(lat2==null || lon2==null) continue;
+
+      const key=(el.type||"")+"/"+(el.id||"");
+      if(seen.has(key)) continue;
+      seen.add(key);
+
+      let name=tags.name || tags["name:en"] || "Unnamed evacuation centre";
+      let type="Relief Camp / Evacuation Centre";
+
+      if(fallback){
+        if(tags.amenity==="school") type="Potential Evacuation Centre (School)";
+        else if(tags.amenity==="community_centre") type="Potential Evacuation Centre (Community Centre)";
+        else type="Potential Evacuation Centre";
+      }
+
+      items.push({
+        id:"camp_"+el.type+"_"+el.id,
+        name,
+        lat:Number(lat2),
+        lon:Number(lon2),
+        type,
+        isPotential:!!fallback,
+        distanceKm:haversineKm({lat,lon},{lat:Number(lat2),lon:Number(lon2)})
+      });
+    }
+    return items;
+  }
+
+  // 1) Confirmed/explicit emergency shelter objects.
+  const formalQuery=`
+[out:json][timeout:30];
 (
-  nwr["amenity"="shelter"](around:${radius},${lat},${lon});
-  nwr["emergency"="shelter"](around:${radius},${lat},${lon});
-  nwr["social_facility"="shelter"](around:${radius},${lat},${lon});
-  nwr["amenity"="community_centre"]["emergency"="yes"](around:${radius},${lat},${lon});
+  nwr["amenity"="shelter"](around:25000,${lat},${lon});
+  nwr["emergency"="shelter"](around:25000,${lat},${lon});
+  nwr["social_facility"="shelter"](around:25000,${lat},${lon});
+  nwr["shelter_type"](around:25000,${lat},${lon});
+  nwr["amenity"="community_centre"]["emergency"="yes"](around:25000,${lat},${lon});
+  nwr["emergency"="assembly_point"](around:25000,${lat},${lon});
 );
 out center tags;
 `;
 
-  const res=await fetch("https://overpass-api.de/api/interpreter",{
-    method:"POST",
-    headers:{"Content-Type":"application/x-www-form-urlencoded"},
-    body:"data="+encodeURIComponent(query)
-  });
+  try{
+    let data=await queryOverpass(formalQuery);
+    let items=makeItems(data,false);
 
-  if(!res.ok) throw new Error("Relief-camp data request failed.");
+    // 2) If no formal shelters are mapped, use likely public evacuation
+    // locations. These are clearly labelled as POTENTIAL, not confirmed camps.
+    if(!items.length){
+      const fallbackQuery=`
+[out:json][timeout:30];
+(
+  nwr["amenity"="school"](around:25000,${lat},${lon});
+  nwr["amenity"="community_centre"](around:25000,${lat},${lon});
+  nwr["emergency"="assembly_point"](around:25000,${lat},${lon});
+);
+out center tags;
+`;
+      data=await queryOverpass(fallbackQuery);
+      items=makeItems(data,true);
+    }
 
-  const data=await res.json();
-  const items=[];
-  const seen=new Set();
-
-  for(const el of (data.elements || [])){
-    const tags=el.tags || {};
-    const name=tags.name || tags["name:en"] ||
-      "Relief Camp / Evacuation Centre";
-    const lat2=el.lat ?? el.center?.lat;
-    const lon2=el.lon ?? el.center?.lon;
-    if(lat2==null || lon2==null) continue;
-
-    const key=`${name}|${Number(lat2).toFixed(5)}|${Number(lon2).toFixed(5)}`;
-    if(seen.has(key)) continue;
-    seen.add(key);
-
-    items.push({
-      id:"camp_"+el.type+"_"+el.id,
-      name,
-      lat:Number(lat2),
-      lon:Number(lon2),
-      type:"Relief Camp / Evacuation Centre",
-      distanceKm:haversineKm({lat,lon},{lat:Number(lat2),lon:Number(lon2)})
-    });
+    // Keep the nearest 20 useful destinations.
+    items.sort((a,b)=>a.distanceKm-b.distanceKm);
+    nearbyReliefCamps=items.slice(0,20);
+    return nearbyReliefCamps;
+  }catch(err){
+    console.error("Relief destination search failed:",err);
+    nearbyReliefCamps=[];
+    throw new Error("Relief-camp search services are temporarily unavailable. Please try again.");
   }
-
-  items.sort((a,b)=>a.distanceKm-b.distanceKm);
-  nearbyReliefCamps=items;
-  return items;
 }
 
 async function loadEmergencyDestinations(lat,lon){
@@ -757,30 +822,41 @@ async function loadEmergencyDestinations(lat,lon){
   hospitalLayer.clearLayers();
   nearbyEmergencyDestinations=[];
 
-  if(vehicle==="ambulance"){
-    await loadNearbyHospitals(lat,lon);
-    nearbyEmergencyDestinations=nearbyHospitals;
-    renderEmergencyDestinations();
-    if(!nearbyHospitals.length){
-      status.innerHTML="<span class='error'>No mapped hospitals were returned within 15 km.</span>";
-      return;
+  try{
+    if(vehicle==="ambulance"){
+      await loadNearbyHospitals(lat,lon);
+      nearbyEmergencyDestinations=nearbyHospitals;
+      renderEmergencyDestinations();
+      if(!nearbyHospitals.length){
+        status.innerHTML="<span class='error'>No mapped hospitals were returned within 15 km.</span>";
+        return;
+      }
+      status.innerHTML=
+        "✓ GPS detected.<br>"+
+        "✓ "+nearbyHospitals.length+" nearby hospitals found.<br>"+
+        "Select a hospital to calculate genuine road alternatives.";
+    }else{
+      await loadNearbyReliefCamps(lat,lon);
+      nearbyEmergencyDestinations=nearbyReliefCamps;
+      renderEmergencyDestinations();
+      if(!nearbyReliefCamps.length){
+        status.innerHTML="<span class='error'>No mapped relief camps or potential evacuation centres were found within 25 km.</span>";
+        return;
+      }
+
+      const potential=nearbyReliefCamps.filter(x=>x.isPotential).length;
+      status.innerHTML=
+        "✓ GPS detected.<br>"+
+        "✓ "+nearbyReliefCamps.length+" emergency destinations found.<br>"+
+        (potential
+          ? "⚠ No formally mapped relief camp was found; potential evacuation centres are shown."
+          : "✓ Mapped relief camps / evacuation centres found.")+"<br>"+
+        "Select a destination to calculate genuine road alternatives.";
     }
-    status.innerHTML=
-      "✓ GPS detected.<br>"+
-      "✓ "+nearbyHospitals.length+" nearby hospitals found.<br>"+
-      "Select a hospital to calculate genuine road alternatives.";
-  }else{
-    await loadNearbyReliefCamps(lat,lon);
-    nearbyEmergencyDestinations=nearbyReliefCamps;
+  }catch(err){
+    console.error(err);
     renderEmergencyDestinations();
-    if(!nearbyReliefCamps.length){
-      status.innerHTML="<span class='error'>No mapped relief camps / evacuation centres were returned within 15 km.</span>";
-      return;
-    }
-    status.innerHTML=
-      "✓ GPS detected.<br>"+
-      "✓ "+nearbyReliefCamps.length+" nearby relief camps / evacuation centres found.<br>"+
-      "Select a relief camp to calculate genuine road alternatives.";
+    status.innerHTML="<span class='error'>"+err.message+"<br>Please press <b>Use My Location</b> again.</span>";
   }
 }
 
