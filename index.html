@@ -56,8 +56,8 @@
       setStatus(`✅ GPS location detected. Accuracy: about ${accuracy} m. Loading nearby hospitals…`, "success");
 
       try {
-        await loadNearbyHospitals(lat, lon);
-        setStatus(`✅ GPS location detected. Nearby hospitals are now shown on the map.`, "success");
+        await loadEmergencyDestinations(lat, lon);
+        setStatus(`✅ GPS location detected. Nearby emergency destinations are now shown on the map.`, "success");
       } catch (err) {
         console.error(err);
         setStatus("⚠️ GPS worked, but nearby hospitals could not be loaded. Check your internet connection and try again.", "error");
@@ -133,7 +133,7 @@ th{background:#f7f9fb}
 <body>
 <header>
   <h1>🛣️ SafeRoute Keralam</h1>
-  <p>AHP-Based Emergency Hospital Route Safety &mdash; GPS + Nearby Hospitals + Real Road Routing</p>
+  <p>AHP-Based Emergency Hospital Route Safety &mdash; GPS + Nearby Emergency Destinations + Real Road Routing</p>
 </header>
 
 <div class="container">
@@ -151,9 +151,12 @@ th{background:#f7f9fb}
 <label>Emergency Vehicle Type</label>
 <select id="vehicleType" onchange="onVehicleTypeChange()">
   <option value="ambulance">🚑 Ambulance — Patient to Hospital</option>
-  <option value="relief-truck">🚚 Relief Truck — Emergency Supplies</option>
+  <option value="relief-truck">🚚 Relief Truck — Supplies to Relief Camp</option>
 </select>
 <div style="font-size:12px;color:#64748b;margin:4px 0 6px;">📏 Distance is real for both emergency vehicles; vehicle type changes suitability, not distance.</div>
+<div id="destinationTypeNote" style="font-size:12px;color:#475569;margin:4px 0 8px;">
+  🚑 Ambulance → Hospitals &nbsp; | &nbsp; 🚚 Relief Truck → Relief Camps / Evacuation Centres
+</div>
 <p id="vehicleNote" class="small">
   Car mode: normal emergency-road suitability ranking.
 </p>
@@ -187,7 +190,7 @@ Ready. Allow GPS to detect your current location and load nearby hospitals.
 </div>
 
 <div class="card">
-<h3>Nearby Hospitals</h3>
+<h3>Nearby Emergency Destinations</h3>
 <div id="hospitalList" class="hospital-list small">
 No hospitals loaded yet.
 </div>
@@ -307,7 +310,7 @@ Suitability Score (RSS) is highlighted as the recommended emergency route.
    LOGICAL CHANGES:
    1. Flooding criterion removed completely.
    2. GPS becomes the default origin.
-   3. Nearby hospitals are discovered from OpenStreetMap/Overpass.
+   3. Nearby emergency destinations are discovered from OpenStreetMap/Overpass.
    4. User selects a hospital as destination.
    5. OSRM supplies genuine road-network routes and distances.
    6. Remaining AHP criteria rank the genuine route alternatives.
@@ -508,6 +511,14 @@ function onVehicleTypeChange(){
     renderResults(rescored, window.lastDestination);
     drawRoutes(rescored, currentLocation, window.lastDestination);
   }
+
+  const destinationNote = document.getElementById("destinationTypeNote");
+  if(destinationNote){
+    destinationNote.innerHTML =
+      getSelectedVehicle() === "ambulance"
+        ? "🚑 Ambulance → Hospitals"
+        : "🚚 Relief Truck → Relief Camps / Evacuation Centres";
+  }
 }
 function calculateScores(routes){
   const distances=routes.map(r=>Number(r.Distance));
@@ -611,7 +622,7 @@ function detectCurrentLocation(){
   );
 }
 
-/* ---------- Nearby hospitals ---------- */
+/* ---------- Nearby emergency destinations ---------- */
 
 async function loadNearbyHospitals(lat,lon){
   const status=document.getElementById("status");
@@ -662,6 +673,60 @@ out center tags;
       "<span class='error'>Hospital search failed:</span> "+error.message;
   }
 }
+
+async function loadNearbyReliefCamps(lat, lon){
+  const radius = 15000;
+  const query = `
+[out:json][timeout:25];
+(
+  node(around:${radius},${lat},${lon})["amenity"="shelter"];
+  way(around:${radius},${lat},${lon})["amenity"="shelter"];
+  relation(around:${radius},${lat},${lon})["amenity"="shelter"];
+  node(around:${radius},${lat},${lon})["emergency"="shelter"];
+  way(around:${radius},${lat},${lon})["emergency"="shelter"];
+  relation(around:${radius},${lat},${lon})["emergency"="shelter"];
+  node(around:${radius},${lat},${lon})["social_facility"="shelter"];
+  way(around:${radius},${lat},${lon})["social_facility"="shelter"];
+  relation(around:${radius},${lat},${lon})["social_facility"="shelter"];
+);
+out center tags;
+`;
+  const res = await fetch("https://overpass-api.de/api/interpreter", {
+    method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body:"data="+encodeURIComponent(query)
+  });
+  if(!res.ok) throw new Error("Relief-camp data request failed");
+  const data = await res.json();
+
+  const items = [];
+  const seen = new Set();
+
+  for(const el of (data.elements || [])){
+    const tags = el.tags || {};
+    const name = tags.name || tags["name:en"] || "Relief Camp / Evacuation Centre";
+    const lat2 = el.lat ?? el.center?.lat;
+    const lon2 = el.lon ?? el.center?.lon;
+    if(lat2 == null || lon2 == null) continue;
+
+    const key = `${name}|${lat2.toFixed(5)}|${lon2.toFixed(5)}`;
+    if(seen.has(key)) continue;
+    seen.add(key);
+
+    items.push({
+      id: "camp_"+el.id,
+      name,
+      lat: lat2,
+      lon: lon2,
+      type: "Relief Camp / Evacuation Centre",
+      distanceKm: haversine(lat, lon, lat2, lon2)
+    });
+  }
+
+  items.sort((a,b)=>a.distanceKm-b.distanceKm);
+  return items;
+}
+
 
 function normalizeHospital(x){
   const lat=x.lat ?? x.center?.lat;
@@ -847,7 +912,7 @@ async function routeToSelectedHospital(){
       "✓ Vehicle type: "+(
         getSelectedVehicle()==="ambulance"
           ? "Ambulance — Patient to Hospital"
-          : "Relief Truck — Emergency Supplies"
+          : "Relief Truck — Supplies to Relief Camp"
       )+"<br>"+
       (getSelectedVehicle()==="ambulance"
         ? "✓ Ambulance suitability uses road width, condition and blockages.<br>"
@@ -1142,7 +1207,7 @@ function renderResults(sorted,destination){
 
   document.getElementById("bestRoute").innerHTML=`
     <div class="route-box">
-      <b>🚑 Vehicle:</b> ${getSelectedVehicle()==="ambulance" ? "Ambulance — Patient to Hospital" : "Relief Truck — Emergency Supplies"}<br>
+      <b>🚑 Vehicle:</b> ${getSelectedVehicle()==="ambulance" ? "Ambulance — Patient to Hospital" : "Relief Truck — Supplies to Relief Camp"}<br>
       <b>🏥 Emergency destination:</b> ${escapeHtml(destination.display)}<br>
       <b>🟢 Recommended route:</b> ${escapeHtml(safest.Route)}<br>
       Route Suitability Score (RSS):
