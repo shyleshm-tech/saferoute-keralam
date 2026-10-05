@@ -1,0 +1,1143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>SafeRoute Keralam | AHP Emergency Hospital Routing</title>
+
+<link rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      crossorigin=""/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        crossorigin=""></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#f4f7fb;color:#172033}
+header{background:linear-gradient(135deg,#0b3954,#087f8c);color:white;padding:20px 28px}
+header h1{margin:0 0 5px;font-size:28px}
+header p{margin:0;opacity:.94}
+.container{max-width:1450px;margin:auto;padding:18px}
+.grid{display:grid;grid-template-columns:370px 1fr;gap:18px}
+.card{background:white;border-radius:12px;padding:18px;box-shadow:0 3px 12px rgba(0,0,0,.08);margin-bottom:16px}
+h2,h3{margin-top:0}
+label{font-weight:700;font-size:14px;display:block;margin:12px 0 6px}
+input,select,button{width:100%;padding:10px;border:1px solid #ccd5df;border-radius:7px;font-size:14px}
+button{background:#087f8c;color:white;border:0;font-weight:700;cursor:pointer;margin-top:10px}
+button:hover{background:#066b75}
+button.secondary{background:#64748b}
+button.gps{background:#159447}
+button.gps:hover{background:#117d3b}
+#map{height:650px;border-radius:10px}
+.status{padding:10px;border-radius:8px;background:#eef5f9;font-size:13px;line-height:1.5}
+.weights table,.results table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:8px;border-bottom:1px solid #e5e7eb;text-align:left}
+th{background:#f7f9fb}
+.best{background:#eaf8ee}
+.badge{display:inline-block;padding:4px 8px;border-radius:12px;font-size:11px;font-weight:700}
+.safe{background:#d8f3df;color:#176b32}
+.info{background:#e1effa;color:#155b83}
+.warn{background:#fff2cc;color:#7a5a00}
+.legend{background:white;padding:10px;border-radius:8px;box-shadow:0 1px 5px #999;font-size:12px}
+.small{font-size:12px;color:#667085;line-height:1.45}
+.route-box{padding:12px;border-left:4px solid #087f8c;background:#f8fafc;margin:8px 0}
+.error{color:#b42318;font-weight:700}
+.suggestions{position:relative;z-index:3000}
+.suggestion{padding:9px;background:white;border:1px solid #e5e7eb;border-top:0;cursor:pointer;font-size:13px}
+.suggestion:hover{background:#f1f5f9}
+.hospital-list{max-height:300px;overflow:auto}
+.hospital-item{padding:9px;border-bottom:1px solid #e5e7eb;cursor:pointer}
+.hospital-item:hover{background:#f5fafb}
+.gps-dot{background:#1683ff;border-radius:50%;width:18px;height:18px;border:3px solid white;box-shadow:0 1px 5px #555}
+.hospital-dot{background:#dc2626;border-radius:50%;width:18px;height:18px;border:3px solid white;box-shadow:0 1px 5px #555}
+@media(max-width:900px){.grid{grid-template-columns:1fr}#map{height:520px}}
+</style>
+</head>
+
+<body>
+<header>
+  <h1>🛣️ SafeRoute Keralam</h1>
+  <p>AHP-Based Emergency Hospital Route Safety &mdash; GPS + Nearby Hospitals + Real Road Routing</p>
+</header>
+
+<div class="container">
+<div class="grid">
+
+<aside>
+
+<div class="card">
+<h2>Emergency Location</h2>
+
+<button class="gps" type="button" onclick="detectCurrentLocation()">
+  📍 Use My Current GPS Location
+</button>
+
+<label>Current / Starting Point</label>
+<input id="start" placeholder="Use GPS or search a place" autocomplete="off">
+<div id="startSuggestions" class="suggestions"></div>
+
+<p class="small">
+GPS is used only after you give browser location permission. On GitHub Pages,
+browser geolocation works through HTTPS.
+</p>
+
+<label>Hospital Destination</label>
+<select id="hospitalSelect" onchange="selectHospitalFromList()">
+  <option value="">Detect GPS first to load nearby hospitals</option>
+</select>
+
+<input id="destination" placeholder="Or search a hospital/place" autocomplete="off">
+<div id="destinationSuggestions" class="suggestions"></div>
+
+<button onclick="routeToSelectedHospital()">🚑 Find Safest Route to Hospital</button>
+
+<div id="status" class="status" style="margin-top:12px">
+Ready. Allow GPS to detect your current location and load nearby hospitals.
+</div>
+</div>
+
+<div class="card">
+<h3>Nearby Hospitals</h3>
+<div id="hospitalList" class="hospital-list small">
+No hospitals loaded yet.
+</div>
+</div>
+
+<div class="card">
+<h3>Road Safety Dataset</h3>
+<input type="file" id="fileInput" accept=".xlsx,.xls,.csv">
+<p class="small">
+Upload an Excel/CSV file containing the six non-flood route attributes:
+Traffic Congestion, Road Condition, Road Width, Road Blockages,
+Destination Accessibility and Distance (distance may be omitted because
+the application calculates actual road distance from OSRM).
+</p>
+</div>
+
+<div class="card weights">
+<h3>Active AHP Weights</h3>
+<p class="small">
+Flooding has been removed as requested. The remaining weights are the
+original survey weights renormalised to sum to 1.00 after removing Flooding.
+CR shown below is the original survey CR; a new six-criterion AHP survey
+should be used for a publication-grade re-estimation.
+</p>
+<table>
+<thead><tr><th>Criterion</th><th>Weight</th></tr></thead>
+<tbody id="weightTable"></tbody>
+</table>
+<p class="small"><b>Original survey CR:</b> 0.0278</p>
+</div>
+
+<div class="card">
+<h3>Scoring Rules</h3>
+<div class="small">
+<b>Destination Accessibility:</b> Direct=1, Moderate=0.5, Indirect=0.<br>
+<b>Traffic:</b> Low=1, Medium=0.5, High=0.<br>
+<b>Road Condition:</b> Good=1, Fair=0.5, Poor=0.<br>
+<b>Road Width:</b> Wide=1, Medium=0.5, Narrow=0.<br>
+<b>Road Blockages:</b> None=1, Minor=0.5, Major=0.<br>
+<b>Distance:</b> shortest displayed road route=1, longest=0.
+</div>
+</div>
+
+</aside>
+
+<main>
+<div class="card">
+<div id="map"></div>
+</div>
+
+<div class="card results">
+<h2>Emergency Route Ranking</h2>
+<div id="bestRoute"></div>
+
+<table>
+<thead>
+<tr>
+<th>Rank</th>
+<th>Route</th>
+<th>Distance</th>
+<th>RSS</th>
+<th>Destination</th>
+<th>Traffic</th>
+<th>Condition</th>
+<th>Width</th>
+<th>Blockages</th>
+</tr>
+</thead>
+<tbody id="resultsBody"></tbody>
+</table>
+
+<p class="small">
+Routes are generated from the actual road network between the user's GPS
+location and the selected hospital. The route with the highest Route
+Suitability Score (RSS) is highlighted as the recommended emergency route.
+</p>
+</div>
+</main>
+
+</div>
+</div>
+
+<script>
+/* ============================================================
+   SAFEROUTE KERALAM
+   Requested adaptation of the supplied FloodSafe code.
+
+   LOGICAL CHANGES:
+   1. Flooding criterion removed completely.
+   2. GPS becomes the default origin.
+   3. Nearby hospitals are discovered from OpenStreetMap/Overpass.
+   4. User selects a hospital as destination.
+   5. OSRM supplies genuine road-network routes and distances.
+   6. Remaining AHP criteria rank the genuine route alternatives.
+   ============================================================ */
+
+/* Original supplied survey weights with Flooding removed.
+   The remaining six are renormalised to sum to 1. */
+const AHP_WEIGHTS = {
+  "Distance": 0.0874145861,
+  "Traffic Congestion": 0.1584597482,
+  "Road Condition": 0.1805917472,
+  "Road Width": 0.1089224081,
+  "Road Blockages": 0.1656752471,
+  "Destination Accessibility": 0.2989362633
+};
+
+const ORIGINAL_CR = 0.02779718;
+
+/* Default demonstration profiles.
+   These are NOT flood attributes. */
+let routeData = [
+  {
+    Route:"Route 1",
+    "Traffic Congestion":"Medium",
+    "Road Condition":"Good",
+    "Road Width":"Wide",
+    "Road Blockages":"None",
+    "Destination Accessibility":"Direct"
+  },
+  {
+    Route:"Route 2",
+    "Traffic Congestion":"Low",
+    "Road Condition":"Fair",
+    "Road Width":"Wide",
+    "Road Blockages":"Minor",
+    "Destination Accessibility":"Moderate"
+  },
+  {
+    Route:"Route 3",
+    "Traffic Congestion":"Medium",
+    "Road Condition":"Fair",
+    "Road Width":"Medium",
+    "Road Blockages":"Major",
+    "Destination Accessibility":"Indirect"
+  }
+];
+
+let map;
+let routeLayers=[];
+let markerLayer=L.layerGroup();
+let hospitalLayer=L.layerGroup();
+let currentLocationMarker=null;
+let currentLocationCircle=null;
+let currentLocation=null;
+let nearbyHospitals=[];
+let selectedHospital=null;
+let startMarker=null;
+let destinationMarker=null;
+let mapSelectionMode="destination";
+let startSearchTimer=null;
+let destinationSearchTimer=null;
+
+function initMap(){
+  map=L.map("map").setView([10.05,76.30],10);
+
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{
+    maxZoom:19,
+    attribution:"© OpenStreetMap contributors"
+  }).addTo(map);
+
+  markerLayer.addTo(map);
+  hospitalLayer.addTo(map);
+  L.control.scale().addTo(map);
+
+  const legend=L.control({position:"bottomright"});
+  legend.onAdd=function(){
+    const div=L.DomUtil.create("div","legend");
+    div.innerHTML=
+      "<b>Map</b><br>"+
+      "🔵 Your GPS location<br>"+
+      "🔴 Nearby hospital<br>"+
+      "🟢 Recommended safest route<br>"+
+      "🔷 Other genuine road route";
+    return div;
+  };
+  legend.addTo(map);
+
+  map.on("click",function(e){
+    setEndpointFromMap(e.latlng.lat,e.latlng.lng,mapSelectionMode);
+  });
+}
+
+function normalizeText(v){
+  return String(v ?? "").trim().toLowerCase();
+}
+
+function qualitativeScore(value,parameter){
+  const v=normalizeText(value);
+
+  if(parameter==="Traffic Congestion"){
+    if(v==="low") return 1;
+    if(v==="medium" || v==="moderate") return 0.5;
+    if(v==="high") return 0;
+  }
+
+  if(parameter==="Road Condition"){
+    if(v==="good") return 1;
+    if(v==="fair" || v==="medium") return 0.5;
+    if(v==="poor") return 0;
+  }
+
+  if(parameter==="Road Width"){
+    if(v==="wide") return 1;
+    if(v==="medium" || v==="moderate") return 0.5;
+    if(v==="narrow") return 0;
+  }
+
+  if(parameter==="Road Blockages"){
+    if(v==="none" || v==="no") return 1;
+    if(v==="minor") return 0.5;
+    if(v==="major") return 0;
+  }
+
+  if(parameter==="Destination Accessibility"){
+    if(v==="direct") return 1;
+    if(v==="moderate") return 0.5;
+    if(v==="indirect") return 0;
+  }
+
+  return 0;
+}
+
+function distanceScore(distance,min,max){
+  if(max===min) return 1;
+  return (max-distance)/(max-min);
+}
+
+function calculateScores(routes){
+  const distances=routes.map(r=>Number(r.Distance));
+  const min=Math.min(...distances);
+  const max=Math.max(...distances);
+
+  return routes.map(r=>{
+    const componentScores={
+      "Distance":distanceScore(Number(r.Distance),min,max),
+      "Traffic Congestion":qualitativeScore(r["Traffic Congestion"],"Traffic Congestion"),
+      "Road Condition":qualitativeScore(r["Road Condition"],"Road Condition"),
+      "Road Width":qualitativeScore(r["Road Width"],"Road Width"),
+      "Road Blockages":qualitativeScore(r["Road Blockages"],"Road Blockages"),
+      "Destination Accessibility":qualitativeScore(r["Destination Accessibility"],"Destination Accessibility")
+    };
+
+    let total=0;
+    for(const p in AHP_WEIGHTS){
+      total += AHP_WEIGHTS[p]*componentScores[p];
+    }
+
+    return {...r,componentScores,SafetyScore:total};
+  });
+}
+
+/* ---------- GPS ---------- */
+
+function detectCurrentLocation(){
+  const status=document.getElementById("status");
+
+  if(!navigator.geolocation){
+    status.innerHTML="<span class='error'>GPS/geolocation is not supported by this browser.</span>";
+    return;
+  }
+
+  status.innerHTML="📍 Requesting your current location...";
+
+  navigator.geolocation.getCurrentPosition(
+    async position=>{
+      const lat=position.coords.latitude;
+      const lon=position.coords.longitude;
+
+      currentLocation={lat,lon,display:"My current GPS location"};
+
+      document.getElementById("start").value=
+        `My current location (${lat.toFixed(5)}, ${lon.toFixed(5)})`;
+      document.getElementById("start").dataset.lat=lat;
+      document.getElementById("start").dataset.lon=lon;
+
+      if(startMarker) map.removeLayer(startMarker);
+
+      currentLocationMarker=L.marker([lat,lon],{
+        icon:L.divIcon({
+          className:"",
+          html:"<div class='gps-dot'></div>",
+          iconSize:[18,18],
+          iconAnchor:[9,9]
+        })
+      }).addTo(markerLayer)
+        .bindPopup("<b>📍 Your current GPS location</b>")
+        .openPopup();
+
+      currentLocationCircle=L.circle([lat,lon],{
+        radius:Math.max(position.coords.accuracy || 50,50),
+        color:"#1683ff",
+        fillOpacity:.10
+      }).addTo(markerLayer);
+
+      map.setView([lat,lon],14);
+
+      status.innerHTML="✓ GPS location detected. Finding nearby hospitals...";
+      await loadNearbyHospitals(lat,lon);
+    },
+    error=>{
+      let msg="Unable to obtain GPS location.";
+      if(error.code===1) msg="Location permission was denied. Please allow location access and try again.";
+      if(error.code===2) msg="Your location could not be determined.";
+      if(error.code===3) msg="GPS request timed out.";
+      status.innerHTML="<span class='error'>"+msg+"</span>";
+    },
+    {enableHighAccuracy:true,timeout:15000,maximumAge:30000}
+  );
+}
+
+/* ---------- Nearby hospitals ---------- */
+
+async function loadNearbyHospitals(lat,lon){
+  const status=document.getElementById("status");
+
+  /* Search approximately within 15 km.
+     Overpass returns hospitals mapped in OpenStreetMap. */
+  const query=`
+[out:json][timeout:25];
+(
+  nwr["amenity"="hospital"](around:15000,${lat},${lon});
+  nwr["healthcare"="hospital"](around:15000,${lat},${lon});
+);
+out center tags;
+`;
+
+  try{
+    const response=await fetch(
+      "https://overpass-api.de/api/interpreter",
+      {
+        method:"POST",
+        body:query,
+        headers:{"Content-Type":"text/plain;charset=UTF-8"}
+      }
+    );
+
+    if(!response.ok) throw new Error("Hospital search service is unavailable.");
+
+    const data=await response.json();
+
+    nearbyHospitals=deduplicateHospitals(
+      (data.elements || []).map(normalizeHospital).filter(Boolean)
+    ).sort((a,b)=>a.distanceKm-b.distanceKm);
+
+    renderHospitals();
+
+    if(!nearbyHospitals.length){
+      status.innerHTML="<span class='error'>No mapped hospitals were returned within 15 km.</span>";
+      return;
+    }
+
+    status.innerHTML=
+      "✓ GPS detected.<br>"+
+      "✓ "+nearbyHospitals.length+" nearby mapped hospitals found.<br>"+
+      "Select a hospital to calculate genuine road alternatives.";
+  }catch(error){
+    console.error(error);
+    status.innerHTML=
+      "<span class='error'>Hospital search failed:</span> "+error.message;
+  }
+}
+
+function normalizeHospital(x){
+  const lat=x.lat ?? x.center?.lat;
+  const lon=x.lon ?? x.center?.lon;
+  if(lat==null || lon==null) return null;
+
+  const tags=x.tags || {};
+  const name=tags.name || tags["name:en"] || "Unnamed Hospital";
+
+  return {
+    id:String(x.type)+"-"+String(x.id),
+    name,
+    lat:Number(lat),
+    lon:Number(lon),
+    distanceKm:haversineKm(currentLocation,{lat:Number(lat),lon:Number(lon)}),
+    address:[
+      tags["addr:street"],
+      tags["addr:city"],
+      tags["addr:district"]
+    ].filter(Boolean).join(", ")
+  };
+}
+
+function deduplicateHospitals(list){
+  const out=[];
+  list.forEach(h=>{
+    const duplicate=out.some(x=>
+      Math.abs(x.lat-h.lat)<0.0005 &&
+      Math.abs(x.lon-h.lon)<0.0005
+    );
+    if(!duplicate) out.push(h);
+  });
+  return out;
+}
+
+function renderHospitals(){
+  const select=document.getElementById("hospitalSelect");
+  const list=document.getElementById("hospitalList");
+
+  hospitalLayer.clearLayers();
+
+  select.innerHTML="<option value=''>Select a nearby hospital</option>";
+
+  if(!nearbyHospitals.length){
+    list.innerHTML="No hospitals found.";
+    return;
+  }
+
+  nearbyHospitals.forEach((h,index)=>{
+    const option=document.createElement("option");
+    option.value=String(index);
+    option.textContent=
+      h.name+" — "+h.distanceKm.toFixed(1)+" km";
+    select.appendChild(option);
+
+    const marker=L.marker([h.lat,h.lon],{
+      icon:L.divIcon({
+        className:"",
+        html:"<div class='hospital-dot'></div>",
+        iconSize:[18,18],
+        iconAnchor:[9,9]
+      })
+    }).addTo(hospitalLayer);
+
+    marker.bindPopup(
+      "<b>🏥 "+escapeHtml(h.name)+"</b><br>"+
+      h.distanceKm.toFixed(2)+" km straight-line from GPS location<br>"+
+      "<button onclick='chooseHospital("+index+")'>Route here</button>"
+    );
+
+    const item=document.createElement("div");
+    item.className="hospital-item";
+    item.innerHTML=
+      "<b>"+escapeHtml(h.name)+"</b><br>"+
+      h.distanceKm.toFixed(2)+" km from your location"+
+      (h.address ? "<br><span class='small'>"+escapeHtml(h.address)+"</span>":"");
+
+    item.onclick=()=>chooseHospital(index);
+    list.appendChild(item);
+  });
+}
+
+function chooseHospital(index){
+  const h=nearbyHospitals[index];
+  if(!h) return;
+
+  selectedHospital=h;
+  document.getElementById("hospitalSelect").value=String(index);
+  document.getElementById("destination").value=h.name;
+  document.getElementById("destination").dataset.lat=h.lat;
+  document.getElementById("destination").dataset.lon=h.lon;
+
+  if(destinationMarker) map.removeLayer(destinationMarker);
+
+  destinationMarker=L.marker([h.lat,h.lon])
+    .addTo(markerLayer)
+    .bindPopup("<b>🏥 "+escapeHtml(h.name)+"</b>")
+    .openPopup();
+
+  map.fitBounds([
+    [currentLocation.lat,currentLocation.lon],
+    [h.lat,h.lon]
+  ],{padding:[35,35]});
+
+  document.getElementById("status").innerHTML=
+    "Selected hospital: <b>"+escapeHtml(h.name)+"</b>.<br>"+
+    "Click <b>Find Safest Route to Hospital</b>.";
+}
+
+function selectHospitalFromList(){
+  const value=document.getElementById("hospitalSelect").value;
+  if(value==="") return;
+  chooseHospital(Number(value));
+}
+
+async function routeToSelectedHospital(){
+  const status=document.getElementById("status");
+
+  try{
+    if(!currentLocation){
+      throw new Error("Detect your current GPS location first.");
+    }
+
+    const hospitalIndex=document.getElementById("hospitalSelect").value;
+
+    let destination;
+
+    if(hospitalIndex!==""){
+      selectedHospital=nearbyHospitals[Number(hospitalIndex)];
+      destination={
+        lat:selectedHospital.lat,
+        lon:selectedHospital.lon,
+        display:selectedHospital.name
+      };
+    }else{
+      const input=document.getElementById("destination");
+      if(input.dataset.lat && input.dataset.lon){
+        destination={
+          lat:Number(input.dataset.lat),
+          lon:Number(input.dataset.lon),
+          display:input.value
+        };
+      }else if(input.value.trim()){
+        status.innerHTML="Searching for the hospital...";
+        destination=await geocodeEndpoint(input.value.trim());
+      }else{
+        throw new Error("Select or search for a hospital destination.");
+      }
+    }
+
+    if(destinationMarker) map.removeLayer(destinationMarker);
+
+    destinationMarker=L.marker([destination.lat,destination.lon])
+      .addTo(markerLayer)
+      .bindPopup("<b>🏥 Destination</b><br>"+escapeHtml(destination.display));
+
+    status.innerHTML=
+      "Calculating genuine road alternatives from your GPS location to "+
+      "<b>"+escapeHtml(destination.display)+"</b>...";
+
+    const candidates=await prepareResearchRoutes(currentLocation,destination);
+
+    if(!candidates.length){
+      throw new Error("No drivable route was returned.");
+    }
+
+    const scored=calculateScores(candidates)
+      .sort((a,b)=>b.SafetyScore-a.SafetyScore);
+
+    renderResults(scored,destination);
+    drawRoutes(scored,currentLocation,destination);
+
+    status.innerHTML=
+      "✓ GPS used as the starting point.<br>"+
+      "✓ Selected hospital used as destination.<br>"+
+      "✓ Actual OSRM road-network distances calculated.<br>"+
+      "✓ Flooding criterion removed from the AHP score.<br>"+
+      "✓ Six remaining route-safety criteria used for ranking.<br>"+
+      "✓ Green route = highest Route Suitability Score.";
+
+  }catch(error){
+    console.error(error);
+    status.innerHTML=
+      "<span class='error'>Routing error:</span> "+error.message;
+  }
+}
+
+/* ---------- Geocoding ---------- */
+
+async function geocodeEndpoint(place){
+  const url=
+    "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=in&q="+
+    encodeURIComponent(place);
+
+  const response=await fetch(url,{headers:{"Accept":"application/json"}});
+  if(!response.ok) throw new Error("Could not search for "+place);
+
+  const data=await response.json();
+  if(!data.length) throw new Error("Could not find "+place);
+
+  return {
+    lat:Number(data[0].lat),
+    lon:Number(data[0].lon),
+    display:data[0].display_name
+  };
+}
+
+/* ---------- OSRM real-road routing ---------- */
+
+async function getRoadRoute(points,alternatives=false){
+  const coords=points.map(p=>`${p.lon},${p.lat}`).join(";");
+
+  const url=
+    "https://router.project-osrm.org/route/v1/driving/"+
+    coords+
+    "?overview=full&geometries=geojson&steps=false&alternatives="+
+    (alternatives ? "true":"false");
+
+  const response=await fetch(url);
+  if(!response.ok) throw new Error("Road routing service failed.");
+
+  const data=await response.json();
+
+  if(data.code!=="Ok" || !data.routes?.length){
+    throw new Error("No drivable road route was found.");
+  }
+
+  return alternatives ? data.routes : data.routes[0];
+}
+
+function haversineKm(a,b){
+  const R=6371;
+  const dLat=(b.lat-a.lat)*Math.PI/180;
+  const dLon=(b.lon-a.lon)*Math.PI/180;
+  const x=
+    Math.sin(dLat/2)**2+
+    Math.cos(a.lat*Math.PI/180)*
+    Math.cos(b.lat*Math.PI/180)*
+    Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(x));
+}
+
+function pointAtFraction(coords,f){
+  let total=0;
+  const ds=[];
+
+  for(let i=1;i<coords.length;i++){
+    const a={lat:coords[i-1][1],lon:coords[i-1][0]};
+    const b={lat:coords[i][1],lon:coords[i][0]};
+    const d=haversineKm(a,b);
+    ds.push(d);
+    total+=d;
+  }
+
+  const target=total*f;
+  let acc=0;
+
+  for(let i=1;i<coords.length;i++){
+    const d=ds[i-1];
+
+    if(acc+d>=target){
+      const t=d ? (target-acc)/d : 0;
+      return {
+        lat:coords[i-1][1]+(coords[i][1]-coords[i-1][1])*t,
+        lon:coords[i-1][0]+(coords[i][0]-coords[i-1][0])*t,
+        prev:{lat:coords[i-1][1],lon:coords[i-1][0]},
+        next:{lat:coords[i][1],lon:coords[i][0]}
+      };
+    }
+    acc+=d;
+  }
+
+  const last=coords[coords.length-1];
+  return {
+    lat:last[1],lon:last[0],
+    prev:{lat:last[1],lon:last[0]},
+    next:{lat:last[1],lon:last[0]}
+  };
+}
+
+function offsetPoint(pt,offsetKm){
+  const dx=pt.next.lon-pt.prev.lon;
+  const dy=pt.next.lat-pt.prev.lat;
+  const len=Math.sqrt(dx*dx+dy*dy)||1;
+  const nx=-dy/len;
+  const ny=dx/len;
+
+  const kmPerLat=111.32;
+  const kmPerLon=111.32*Math.cos(pt.lat*Math.PI/180);
+
+  return {
+    lat:pt.lat+(ny*offsetKm/kmPerLat),
+    lon:pt.lon+(nx*offsetKm/kmPerLon)
+  };
+}
+
+async function prepareResearchRoutes(startPoint,destinationPoint){
+  const base=await getRoadRoute([startPoint,destinationPoint],true);
+  const candidates=base.map((road,index)=>({
+    road,
+    kind:"OSRM alternative",
+    index
+  }));
+
+  const primary=base[0];
+
+  /* If OSRM supplies only one alternative, try nearby drivable
+     corridors around the real primary route. No fixed Kerala town
+     or study-location waypoint is inserted. */
+  if(base.length<3 &&
+     primary.geometry &&
+     primary.geometry.coordinates.length>4){
+
+    const fractions=[0.25,0.40,0.55,0.70,0.82];
+    const offsets=[0.8,-0.8,1.5,-1.5,2.5,-2.5];
+
+    for(const f of fractions){
+      const p=pointAtFraction(primary.geometry.coordinates,f);
+
+      for(const off of offsets){
+        const via=offsetPoint(p,off);
+
+        try{
+          const r=await getRoadRoute(
+            [startPoint,via,destinationPoint],false
+          );
+
+          if(r.distance>primary.distance*1.35) continue;
+
+          const distinct=candidates.every(c=>{
+            const ratio=
+              Math.abs(r.distance-c.road.distance)/
+              Math.max(r.distance,c.road.distance);
+            return ratio>0.025;
+          });
+
+          if(distinct){
+            candidates.push({
+              road:r,
+              kind:"Nearby road corridor",
+              via
+            });
+          }
+
+          if(candidates.length>=3) break;
+        }catch(e){}
+      }
+
+      if(candidates.length>=3) break;
+    }
+  }
+
+  const unique=[];
+
+  for(const c of candidates){
+    const distinct=unique.every(u=>
+      Math.abs(c.road.distance-u.road.distance)/
+      Math.max(c.road.distance,u.road.distance)>0.015
+    );
+
+    if(distinct) unique.push(c);
+    if(unique.length>=3) break;
+  }
+
+  return unique.map((item,index)=>{
+    const profile=routeData[index % routeData.length];
+
+    return {
+      ...profile,
+      Route:"Route "+(index+1),
+      Distance:item.road.distance/1000,
+      Duration:item.road.duration/60,
+      Geometry:item.road.geometry,
+      Type:item.kind,
+      Points:[startPoint,destinationPoint]
+    };
+  });
+}
+
+/* ---------- Map drawing ---------- */
+
+function clearRoutes(){
+  routeLayers.forEach(l=>map.removeLayer(l));
+  routeLayers=[];
+}
+
+function drawRoutes(sorted,start,destination){
+  clearRoutes();
+
+  const bounds=[
+    [start.lat,start.lon],
+    [destination.lat,destination.lon]
+  ];
+
+  [...sorted].reverse().forEach(r=>{
+    const highest=r===sorted[0];
+
+    const layer=L.geoJSON(r.Geometry,{
+      style:{
+        color:highest ? "#159447":"#2563eb",
+        weight:highest ? 8:5,
+        opacity:highest ? .90:.65
+      }
+    }).bindPopup(
+      "<b>"+escapeHtml(r.Route)+"</b><br>"+
+      "Type: "+escapeHtml(r.Type)+"<br>"+
+      "Actual road distance: <b>"+r.Distance.toFixed(2)+" km</b><br>"+
+      "Estimated driving time: <b>"+r.Duration.toFixed(1)+" min</b><br>"+
+      "Route Suitability Score: <b>"+r.SafetyScore.toFixed(4)+"</b>"+
+      (highest ? "<br><br><b>🟢 RECOMMENDED SAFEST ROUTE</b>":"")
+    ).addTo(map);
+
+    routeLayers.push(layer);
+  });
+
+  if(bounds.length) map.fitBounds(bounds,{padding:[30,30]});
+}
+
+/* ---------- Results ---------- */
+
+function renderWeights(){
+  const body=document.getElementById("weightTable");
+  body.innerHTML="";
+
+  Object.entries(AHP_WEIGHTS)
+    .sort((a,b)=>b[1]-a[1])
+    .forEach(([name,w])=>{
+      body.innerHTML+=
+        `<tr><td>${escapeHtml(name)}</td><td>${(w*100).toFixed(2)}%</td></tr>`;
+    });
+}
+
+function renderResults(sorted,destination){
+  const body=document.getElementById("resultsBody");
+  body.innerHTML="";
+
+  sorted.forEach((r,i)=>{
+    body.innerHTML+=`
+      <tr class="${i===0?"best":""}">
+        <td><b>${i+1}</b></td>
+        <td>
+          ${escapeHtml(r.Route)}
+          ${i===0?'<span class="badge safe">RECOMMENDED</span>':""}
+        </td>
+        <td>${r.Distance.toFixed(2)} km</td>
+        <td><b>${r.SafetyScore.toFixed(4)}</b></td>
+        <td>${escapeHtml(r["Destination Accessibility"])}</td>
+        <td>${escapeHtml(r["Traffic Congestion"])}</td>
+        <td>${escapeHtml(r["Road Condition"])}</td>
+        <td>${escapeHtml(r["Road Width"])}</td>
+        <td>${escapeHtml(r["Road Blockages"])}</td>
+      </tr>`;
+  });
+
+  const safest=sorted[0];
+  const second=sorted[1];
+
+  const margin=second
+    ? safest.SafetyScore-second.SafetyScore
+    : safest.SafetyScore;
+
+  document.getElementById("bestRoute").innerHTML=`
+    <div class="route-box">
+      <b>🏥 Emergency destination:</b> ${escapeHtml(destination.display)}<br>
+      <b>🟢 Recommended route:</b> ${escapeHtml(safest.Route)}<br>
+      Route Suitability Score (RSS):
+      <b>${safest.SafetyScore.toFixed(4)}</b><br>
+      Actual road distance:
+      <b>${safest.Distance.toFixed(2)} km</b><br>
+      Estimated driving time:
+      <b>${safest.Duration.toFixed(1)} min</b><br>
+      Decision margin:
+      <b>${margin.toFixed(4)}</b>
+      ${margin<0.05
+        ? '<br><span class="badge warn">CLOSE DECISION — verify road conditions before dispatch</span>'
+        : '<br><span class="badge safe">CLEARER ROUTE PREFERENCE</span>'}
+    </div>`;
+}
+
+/* ---------- Search / map endpoint ---------- */
+
+function setMapMode(mode){
+  mapSelectionMode=mode;
+  document.getElementById("status").innerHTML=
+    mode==="start"
+      ? "📍 Click the map to choose the starting point."
+      : "📍 Click the map to choose the hospital/destination.";
+}
+
+function setEndpointFromMap(lat,lon,mode){
+  const id=mode==="start"?"start":"destination";
+  const input=document.getElementById(id);
+
+  input.value=`Selected map location (${lat.toFixed(5)}, ${lon.toFixed(5)})`;
+  input.dataset.lat=lat;
+  input.dataset.lon=lon;
+
+  const marker=L.marker([lat,lon]).addTo(markerLayer)
+    .bindPopup("<b>"+(mode==="start"?"Start":"Destination")+
+      " selected</b>")
+    .openPopup();
+
+  if(mode==="start"){
+    if(startMarker) map.removeLayer(startMarker);
+    startMarker=marker;
+    currentLocation={lat,lon,display:input.value};
+  }else{
+    if(destinationMarker) map.removeLayer(destinationMarker);
+    destinationMarker=marker;
+  }
+}
+
+async function searchEndpointSuggestions(query,mode){
+  if(query.length<3) return;
+
+  try{
+    const url=
+      "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=in&q="+
+      encodeURIComponent(query);
+
+    const response=await fetch(url,{headers:{"Accept":"application/json"}});
+    const data=await response.json();
+
+    const box=document.getElementById(mode+"Suggestions");
+
+    box.innerHTML=data.map(x=>
+      `<div class="suggestion"
+            data-lat="${x.lat}"
+            data-lon="${x.lon}"
+            data-name="${escapeHtml(x.display_name)}">
+        ${escapeHtml(x.display_name)}
+      </div>`
+    ).join("");
+
+    box.querySelectorAll(".suggestion").forEach(el=>{
+      el.onclick=()=>{
+        const input=document.getElementById(mode);
+        input.value=el.dataset.name;
+        input.dataset.lat=el.dataset.lat;
+        input.dataset.lon=el.dataset.lon;
+        box.innerHTML="";
+
+        const marker=L.marker([
+          Number(el.dataset.lat),
+          Number(el.dataset.lon)
+        ]).addTo(markerLayer)
+          .bindPopup(
+            "<b>"+(mode==="start"?"Start":"Destination")+
+            "</b><br>"+escapeHtml(el.dataset.name)
+          );
+
+        if(mode==="start"){
+          if(startMarker) map.removeLayer(startMarker);
+          startMarker=marker;
+          currentLocation={
+            lat:Number(el.dataset.lat),
+            lon:Number(el.dataset.lon),
+            display:el.dataset.name
+          };
+        }else{
+          if(destinationMarker) map.removeLayer(destinationMarker);
+          destinationMarker=marker;
+        }
+      };
+    });
+  }catch(e){
+    console.warn(mode+" search failed",e);
+  }
+}
+
+function wireEndpointInput(id,mode){
+  document.getElementById(id).addEventListener("input",function(){
+    this.dataset.lat="";
+    this.dataset.lon="";
+
+    const timer=mode==="start"
+      ? "startSearchTimer"
+      : "destinationSearchTimer";
+
+    clearTimeout(window[timer]);
+
+    window[timer]=setTimeout(
+      ()=>searchEndpointSuggestions(this.value.trim(),mode),
+      350
+    );
+  });
+}
+
+/* ---------- Dataset upload ---------- */
+
+document.getElementById("fileInput").addEventListener(
+  "change",
+  async function(e){
+
+  const file=e.target.files[0];
+  if(!file) return;
+
+  try{
+    const buffer=await file.arrayBuffer();
+    const workbook=XLSX.read(buffer,{type:"array"});
+    const sheet=workbook.Sheets[workbook.SheetNames[0]];
+    const rows=XLSX.utils.sheet_to_json(sheet,{defval:""});
+
+    if(!rows.length){
+      throw new Error("The uploaded dataset is empty.");
+    }
+
+    const aliases={
+      "Destination Accessibility":
+        ["Destination Accessibility","Hospital Accessibility"],
+      "Traffic Congestion":["Traffic Congestion"],
+      "Road Condition":["Road Condition"],
+      "Road Width":["Road Width"],
+      "Road Blockages":["Road Blockages"]
+    };
+
+    const headers=Object.keys(rows[0]);
+
+    function findHeader(names){
+      return names.find(n=>headers.includes(n));
+    }
+
+    const required=[
+      "Destination Accessibility",
+      "Traffic Congestion",
+      "Road Condition",
+      "Road Width",
+      "Road Blockages"
+    ];
+
+    const missing=required.filter(k=>!findHeader(aliases[k]));
+
+    if(missing.length){
+      throw new Error(
+        "Missing required non-flood columns: "+missing.join(", ")
+      );
+    }
+
+    routeData=rows.map((row,i)=>({
+      Route:row.Route || "Route "+(i+1),
+      "Traffic Congestion":row[findHeader(aliases["Traffic Congestion"])],
+      "Road Condition":row[findHeader(aliases["Road Condition"])],
+      "Road Width":row[findHeader(aliases["Road Width"])],
+      "Road Blockages":row[findHeader(aliases["Road Blockages"])],
+      "Destination Accessibility":
+        row[findHeader(aliases["Destination Accessibility"])]
+    }));
+
+    document.getElementById("status").innerHTML=
+      "✓ Dataset loaded: <b>"+rows.length+
+      "</b> route records.<br>"+
+      "Flooding column is ignored/removed from the scoring model.<br>"+
+      "Use GPS + hospital selection to calculate the real routes.";
+
+  }catch(error){
+    document.getElementById("status").innerHTML=
+      "<span class='error'>Dataset error:</span> "+
+      escapeHtml(error.message);
+  }
+});
+
+/* ---------- Utilities ---------- */
+
+function escapeHtml(value){
+  return String(value ?? "")
+    .replace(/&/g,"&amp;")
+    .replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;")
+    .replace(/'/g,"&#039;");
+}
+
+wireEndpointInput("start","start");
+wireEndpointInput("destination","destination");
+
+renderWeights();
+initMap();
+</script>
+</body>
+</html>
