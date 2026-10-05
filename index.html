@@ -148,12 +148,12 @@ th{background:#f7f9fb}
   📍 📍 Use My Current GPS Location
 </button>
 
-<label>Vehicle Type</label>
+<label>Emergency Vehicle Type</label>
 <select id="vehicleType" onchange="onVehicleTypeChange()">
-  <option value="car">🚗 Car / Normal Vehicle</option>
   <option value="ambulance">🚑 Ambulance — Patient to Hospital</option>
-  <option value="relief-truck">🚚 Relief Truck</option>
+  <option value="relief-truck">🚚 Relief Truck — Emergency Supplies</option>
 </select>
+<div style="font-size:12px;color:#64748b;margin:4px 0 6px;">📏 Distance is real for both emergency vehicles; vehicle type changes suitability, not distance.</div>
 <p id="vehicleNote" class="small">
   Car mode: normal emergency-road suitability ranking.
 </p>
@@ -210,8 +210,9 @@ the application calculates actual road distance from OSRM).
 When <b>Ambulance — Patient to Hospital</b> is selected, the detected GPS position is
 treated as the patient's pickup location and the selected nearby hospital is treated
 as the destination. The application compares real road routes and applies the
-project's safety criteria, with additional ambulance suitability checks for road
-width, road condition and major blockages.
+project's safety criteria, with additional emergency-vehicle suitability checks.
+The displayed distance is always the actual road-network distance; vehicle type
+changes route suitability, not the kilometre value.
 </p>
 <p class="small"><b>Important:</b> This is an academic route-safety decision-support
 prototype, not a medical dispatch system or a guarantee of emergency response time,
@@ -252,7 +253,7 @@ should be used for a publication-grade re-estimation.
 <b>Road Condition:</b> Good=1, Fair=0.5, Poor=0.<br>
 <b>Road Width:</b> Wide=1, Medium=0.5, Narrow=0.<br>
 <b>Road Blockages:</b> None=1, Minor=0.5, Major=0.<br>
-<b>Distance:</b> shortest displayed road route=1, longest=0.<br>
+<b>Distance:</b> based on actual OSRM road-network distance; vehicle type does not alter kilometres.<br>
 <b>Ambulance:</b> Wide=Suitable, Medium=Caution, Narrow=Avoid; poor condition/major blockages reduce suitability.<br>
 <b>Relief Truck:</b> Wide=Suitable, Medium=Caution, Narrow=Avoid; Major blockages=Avoid.
 </div>
@@ -445,16 +446,13 @@ function distanceScore(distance,min,max){
 }
 
 function getSelectedVehicle(){
-  return document.getElementById("vehicleType")?.value || "car";
+  return document.getElementById("vehicleType")?.value || "ambulance";
 }
 
 function vehicleSuitability(route, vehicle){
   const width = normalizeText(route["Road Width"]);
   const blockages = normalizeText(route["Road Blockages"]);
   const condition = normalizeText(route["Road Condition"]);
-
-  // Normal car: no additional vehicle feasibility penalty.
-  if(vehicle === "car") return 1;
 
   // Ambulance: prioritize roads that can safely carry an emergency vehicle.
   // Narrow roads and major blockages are unsuitable. Poor condition is penalized.
@@ -500,7 +498,7 @@ function onVehicleTypeChange(){
       "🚚 Relief Truck mode: wide roads are preferred, narrow roads and major blockages are avoided. " +
       "OSRM supplies the real road geometry; this does not claim legal truck restrictions.";
   }else{
-    note.textContent = "Car mode: normal emergency-road suitability ranking.";
+    note.textContent = "Select an emergency vehicle to rank suitable routes.";
   }
 
   if(window.lastScoredRoutes && window.lastDestination){
@@ -532,21 +530,23 @@ function calculateScores(routes){
     }
 
     const vehicle = getSelectedVehicle();
-    const truckSuitability = vehicleSuitability(r, vehicle);
+    const emergencySuitability = vehicleSuitability(r, vehicle);
 
     /*
-     * Keep the original AHP score intact, then apply a vehicle-feasibility
-     * factor. This prevents a narrow/blocked route from being recommended
-     * for a relief truck merely because it is short.
+     * IMPORTANT:
+     * Distance is NEVER changed by vehicle type.
+     * The distance shown remains the actual OSRM road-network distance.
+     *
+     * Vehicle type only changes the suitability of that road for the
+     * selected emergency vehicle. Therefore a longer but wider/clearer
+     * road can outrank a shorter unsuitable road.
      */
-    const adjustedScore = vehicle === "relief-truck"
-      ? total * truckSuitability
-      : total;
+    const adjustedScore = total * emergencySuitability;
 
     return {
       ...r,
       componentScores,
-      VehicleSuitability: truckSuitability,
+      VehicleSuitability: emergencySuitability,
       SafetyScore: adjustedScore
     };
   });
@@ -847,9 +847,7 @@ async function routeToSelectedHospital(){
       "✓ Vehicle type: "+(
         getSelectedVehicle()==="ambulance"
           ? "Ambulance — Patient to Hospital"
-          : getSelectedVehicle()==="relief-truck"
-            ? "Relief Truck"
-            : "Car / Normal Vehicle"
+          : "Relief Truck — Emergency Supplies"
       )+"<br>"+
       (getSelectedVehicle()==="ambulance"
         ? "✓ Ambulance suitability uses road width, condition and blockages.<br>"
@@ -1124,9 +1122,7 @@ function renderResults(sorted,destination){
         </td>
         <td>${getSelectedVehicle()==="ambulance"
           ? (r.VehicleSuitability===1 ? "Ambulance Suitable" : r.VehicleSuitability>=0.5 ? "Caution" : "Avoid")
-          : getSelectedVehicle()==="relief-truck"
-            ? (r.VehicleSuitability===1 ? "Suitable" : r.VehicleSuitability===0.5 ? "Caution" : "Avoid")
-            : "Normal"}</td>
+          : (r.VehicleSuitability===1 ? "Truck Suitable" : r.VehicleSuitability===0.5 ? "Caution" : "Avoid")}</td>
         <td>${r.Distance.toFixed(2)} km</td>
         <td><b>${r.SafetyScore.toFixed(4)}</b></td>
         <td>${escapeHtml(r["Destination Accessibility"])}</td>
@@ -1146,7 +1142,7 @@ function renderResults(sorted,destination){
 
   document.getElementById("bestRoute").innerHTML=`
     <div class="route-box">
-      <b>🚑 Vehicle:</b> ${getSelectedVehicle()==="ambulance" ? "Ambulance — Patient to Hospital" : getSelectedVehicle()==="relief-truck" ? "Relief Truck" : "Car / Normal Vehicle"}<br>
+      <b>🚑 Vehicle:</b> ${getSelectedVehicle()==="ambulance" ? "Ambulance — Patient to Hospital" : "Relief Truck — Emergency Supplies"}<br>
       <b>🏥 Emergency destination:</b> ${escapeHtml(destination.display)}<br>
       <b>🟢 Recommended route:</b> ${escapeHtml(safest.Route)}<br>
       Route Suitability Score (RSS):
