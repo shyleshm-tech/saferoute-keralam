@@ -1000,3 +1000,14 @@ The central idea is:
 ## 🇮🇳 Developed for Emergency Route Safety Research in Kerala
 
 **© 2026 Shylesh M Nampoothiri | B.Tech 3rd Year – Civil Engineering**
+
+
+
+Some samples of the site 
+
+
+
+<img width="1281" height="872" alt="image" src="https://github.com/user-attachments/assets/d347eb7d-1017-4c13-8c25-ef97aa2bd88c" />
+
+<img width="1857" height="897" alt="image" src="https://github.com/user-attachments/assets/2369ada7-d2c1-4b9b-ac2e-f0637a1bc3db" />
+
