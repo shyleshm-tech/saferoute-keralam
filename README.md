@@ -1007,7 +1007,11 @@ Some samples of the site
 
 
 
+pic 1
 <img width="1281" height="872" alt="image" src="https://github.com/user-attachments/assets/d347eb7d-1017-4c13-8c25-ef97aa2bd88c" />
-
+pic 2
 <img width="1857" height="897" alt="image" src="https://github.com/user-attachments/assets/2369ada7-d2c1-4b9b-ac2e-f0637a1bc3db" />
+pic 3
+<img width="827" height="561" alt="image" src="https://github.com/user-attachments/assets/7dd418d5-6c21-4da8-bdcc-87f3df619573" />
+
 
