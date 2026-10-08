@@ -1016,4 +1016,55 @@ pic 2
 pic 3
 <img width="827" height="561" alt="image" src="https://github.com/user-attachments/assets/7dd418d5-6c21-4da8-bdcc-87f3df619573" />
 
+# ☕ Support the Developer
 
+If **SafeRoute Keralam** helped you, impressed you, confused you, or made you spend way too much time staring at routes on a map... 😅
+
+You can support the developer with a cup of coffee ☕❤️
+
+> **Every line of code was written with Civil Engineering knowledge, JavaScript debugging, and an unhealthy amount of coffee.** 😂
+
+### ☕ Buy Me a Coffee
+
+If you'd like to support the project:
+
+**☕ Buy me a coffee — because even emergency routes need fuel!**
+
+[💰 Support the Developer](#)
+
+---
+
+### 😂 Developer Fuel
+
+```text
+Civil Engineering        ████████████████  100%
+JavaScript               ████████████      75%
+GIS                      ███████████████   90%
+AHP                      ██████████████    85%
+Debugging                █████████████████ 110%
+Coffee                   █████████████████ ∞
+Sleep                    ██                  10%
+```
+
+### 👨‍💻 Built by
+
+**Shylesh M Nampoothiri**  
+B.Tech 3rd Year – Civil Engineering
+
+> *"If the route doesn't work, check the code.  
+> If the code doesn't work, check the route.  
+> If both don't work... have coffee."* ☕😂
+
+---
+
+### ⭐ Like the Project?
+
+If you found this project useful, consider:
+
+⭐ **Starring the repository**  
+🍴 **Forking the project**  
+🐛 **Reporting bugs**  
+💡 **Suggesting improvements**  
+☕ **Buying the developer a coffee**
+
+Every bit of support helps keep the project — and the developer — running! 🚀
